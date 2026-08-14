@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "btop-monitor",
+  "name": "btop System Monitor",
+  "version": "1.0.0",
+  "author": "IM0001GT",
+  "description": "btop launcher with a CPU/RAM/GPU/storage hover panel",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Btop.qml"
+  },
+  "barWidget": {
+    "displayName": "btop System Monitor",
+    "description": "btop launcher with a CPU/RAM/GPU/storage hover panel",
+    "category": "System",
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}

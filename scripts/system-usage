@@ -1,0 +1,154 @@
+#!/bin/bash
+
+# Sample system usage in one shot for the btop-monitor bar widget hover panel.
+# Output format (one token per line, whitespace separated):
+#   cpu <overall-percent>
+#   core <index> <percent>        (one line per logical core)
+#   ram <used-gib> <total-gib> <percent>
+#   gpu <percent> | n/a
+#   disk <mount> <used-gib> <total-gib> <percent>   (one line per device)
+#
+# GPU source is the first tool that actually returns a sample:
+#   NVIDIA -> nvidia-smi (nvidia-utils; skipped if the driver is not talking)
+#   Intel  -> intel_gpu_top (intel-gpu-tools; needs kernel.perf_event_paranoid <= 0)
+#   AMD    -> kernel sysfs gpu_busy_percent (amdgpu, no extra package)
+
+# ---- CPU -------------------------------------------------------------
+
+sample_cpu() {
+  awk '
+    /^cpu[0-9]* / {
+      total = $2 + $3 + $4 + $5 + $6 + $7 + $8
+      idle = $5 + $6
+      print $1, total, idle
+    }
+  ' /proc/stat
+}
+
+{
+  echo "A"
+  sample_cpu
+  sleep 0.2
+  echo "B"
+  sample_cpu
+} | awk '
+  /^A$/ { phase = 1; next }
+  /^B$/ { phase = 2; next }
+  {
+    name = $1
+    total[name] = $2
+    idle[name] = $3
+    if (phase == 1) { a_total[name] = $2; a_idle[name] = $3 }
+  }
+  END {
+    total_cpu = 0
+    for (name in total) if (name ~ /^cpu[0-9]+$/) total_cpu++
+
+    if (("cpu" in a_total) && ("cpu" in total)) {
+      dtotal = total["cpu"] - a_total["cpu"]
+      didle = idle["cpu"] - a_idle["cpu"]
+      pct = (dtotal > 0) ? (dtotal - didle) / dtotal * 100 : 0
+      if (pct < 0) pct = 0
+      if (pct > 100) pct = 100
+      printf "cpu %.0f\n", pct
+    }
+
+    for (i = 0; i < total_cpu; i++) {
+      name = "cpu" i
+      if (!(name in a_total) || !(name in total)) continue
+      dtotal = total[name] - a_total[name]
+      didle = idle[name] - a_idle[name]
+      pct = (dtotal > 0) ? (dtotal - didle) / dtotal * 100 : 0
+      if (pct < 0) pct = 0
+      if (pct > 100) pct = 100
+      printf "core %d %.0f\n", i, pct
+    }
+  }
+'
+
+# ---- RAM -------------------------------------------------------------
+
+awk '
+  /^MemTotal:/     { total = $2 }
+  /^MemAvailable:/ { avail = $2 }
+  END {
+    used = total - avail
+    pct = (total > 0) ? used / total * 100 : 0
+    printf "ram %.1f %.1f %.0f\n", used / 1048576, total / 1048576, pct
+  }
+' /proc/meminfo
+
+# ---- GPU -------------------------------------------------------------
+
+gpu_from_nvidia() {
+  command -v nvidia-smi >/dev/null 2>&1 || return 1
+  local vals max="" v
+  vals=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null || true)
+  while IFS= read -r v; do
+    v=${v//[^0-9]/}
+    if [[ -n $v && ( -z $max || v -gt max ) ]]; then
+      max=$v
+    fi
+  done <<< "$vals"
+  [[ -n $max ]] || return 1
+  echo "gpu $max"
+}
+
+gpu_from_intel() {
+  command -v intel_gpu_top >/dev/null 2>&1 || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  local out
+  out=$(intel_gpu_top -J -n 1 -s 300 -o - 2>/dev/null | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+sample = data[0] if isinstance(data, list) and data else data
+engines = sample.get("engines") if isinstance(sample, dict) else {}
+busy = [float(e["busy"]) for e in engines.values()
+        if isinstance(e, dict) and "busy" in e]
+if busy:
+    print("gpu %d" % max(0, min(100, round(max(busy)))))
+' || true)
+  [[ $out == gpu* ]] || return 1
+  printf '%s\n' "$out"
+}
+
+gpu_from_amd() {
+  local f v
+  for f in /sys/class/drm/card*/device/gpu_busy_percent; do
+    [[ -f $f ]] || continue
+    v=$(tr -dc '0-9' < "$f" 2>/dev/null)
+    if [[ -n $v ]]; then
+      echo "gpu $v"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Prefer a tool that actually returns a sample. A leftover nvidia-smi (or
+# intel_gpu_top without PMU access) must not hide a working fallback.
+gpu_report() {
+  gpu_from_nvidia && return
+  gpu_from_intel && return
+  gpu_from_amd && return
+  echo "gpu n/a"
+}
+
+gpu_report
+
+# ---- Storage ---------------------------------------------------------
+
+df -P -x tmpfs -x devtmpfs -x squashfs -x overlay -x iso9660 2>/dev/null |
+  awk '
+    NR > 1 && $1 ~ /^\/dev\// {
+      if (seen[$1]) next
+      seen[$1] = 1
+      used_g = $3 / 1048576
+      total_g = $2 / 1048576
+      pct = ($2 > 0) ? $3 / $2 * 100 : 0
+      printf "disk %s %.1f %.1f %.0f\n", $6, used_g, total_g, pct
+    }
+  '

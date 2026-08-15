@@ -9,9 +9,7 @@ Omarchy Quattro dropped the stock btop widget from the default bar. This third-p
 | Hover the CPU icon | Popup with CPU (overall + per core), RAM, GPU, and each disk |
 | Click the icon | Launch or focus `btop` |
 
-GPU sampling works on Intel (DRM fdinfo / RC6 sysfs), NVIDIA (`nvidia-smi`), and AMD (`gpu_busy_percent`, then DRM fdinfo). Hybrid laptops use the first tool that actually returns a reading. Intel does **not** change `kernel.perf_event_paranoid`.
-
-The hover panel does **not** scrape a running `btop` process — btop has no export API. It samples the same kernel sources itself. For Intel the headline GPU % is Render/3D (`render` / `gfx` / `compute`) averaged over the 2s refresh, which is what btop shows as GPU load. A leftover `nvidia-smi` without a loaded NVIDIA driver is ignored so it cannot stall the panel.
+GPU sampling works on Intel (DRM fdinfo / RC6 sysfs), NVIDIA (`nvidia-smi`), and AMD (`gpu_busy_percent`, then DRM fdinfo). Hybrid laptops use the first tool that actually returns a reading. Intel does **not** change `kernel.perf_event_paranoid`. The Intel headline GPU % is Render/3D (`render` / `gfx` / `compute`) averaged over the 2s refresh. `nvidia-smi` is used only when the NVIDIA driver is actually loaded, so a leftover binary cannot stall the panel.
 
 ## BC-250 note
 

@@ -98,7 +98,7 @@ gpu_from_nvidia() {
   command -v nvidia-smi >/dev/null 2>&1 || return 1
   local vals max="" v cmd=(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits)
   if command -v timeout >/dev/null 2>&1; then
-    cmd=(timeout 0.4 "${cmd[@]}")
+    cmd=(timeout 2 "${cmd[@]}")
   fi
   vals=$("${cmd[@]}" 2>/dev/null || true)
   while IFS= read -r v; do
@@ -352,7 +352,7 @@ gpu_report
 
 if command -v python3 >/dev/null 2>&1; then
   python3 - <<'PY'
-import glob, os, re, subprocess
+import os, re, subprocess
 
 def cache_path():
     runtime = os.environ.get("XDG_RUNTIME_DIR")
@@ -541,7 +541,7 @@ else:
 PY
 fi
 
-# Cheap process scan so high GPU can pick "drawing frames" vs "crunching tensors".
+# Detect local inference processes for GPU status lines.
 if command -v python3 >/dev/null 2>&1; then
   python3 - <<'PY'
 import os
@@ -589,6 +589,98 @@ def is_infer():
     return False
 
 print("gpu_kind %s" % ("infer" if is_infer() else "render"))
+PY
+fi
+
+# Activity flags: memory/storage quips only when usage is actually moving.
+if command -v python3 >/dev/null 2>&1; then
+  python3 - <<'PY'
+import os, re, time
+
+def state_path():
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime:
+        return os.path.join(runtime, "btop-monitor-activity")
+    cache = os.path.join(os.path.expanduser("~"), ".cache", "btop-monitor")
+    try:
+        os.makedirs(cache, mode=0o700, exist_ok=True)
+    except OSError:
+        return None
+    return os.path.join(cache, "activity")
+
+def mem_used_kb():
+    total = avail = 0
+    with open("/proc/meminfo", encoding="utf-8", errors="ignore") as fh:
+        for line in fh:
+            if line.startswith("MemTotal:"):
+                total = int(line.split()[1])
+            elif line.startswith("MemAvailable:"):
+                avail = int(line.split()[1])
+    return max(0, total - avail), total
+
+def disk_ops():
+    ops = 0
+    try:
+        fh = open("/proc/diskstats", encoding="utf-8", errors="ignore")
+    except OSError:
+        return 0
+    with fh:
+        for line in fh:
+            p = line.split()
+            if len(p) < 8:
+                continue
+            name = p[2]
+            if name.startswith(("loop", "ram", "zram", "sr", "fd", "dm-")):
+                continue
+            if re.search(r"(p\d+|[0-9]+)$", name) and not re.match(r"nvme\d+n\d+$", name):
+                continue
+            ops += int(p[3]) + int(p[7])
+    return ops
+
+def load_prev(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            t, used, ops = fh.read().split()
+        return int(t), int(used), int(ops)
+    except (OSError, ValueError):
+        return None
+
+def save(path, t, used, ops):
+    tmp = path + ".tmp"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("%d %d %d\n" % (t, used, ops))
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+now = time.monotonic_ns()
+used, total = mem_used_kb()
+ops = disk_ops()
+path = state_path()
+prev = load_prev(path) if path else None
+if path:
+    save(path, now, used, ops)
+
+ram_active = 0
+disk_io = 0
+if prev:
+    t0, used0, ops0 = prev
+    dt = (now - t0) / 1e9
+    if 0.4 <= dt <= 10:
+        # ~32 MiB or 1% of RAM since the last sample
+        thresh = max(32768, total // 100) if total else 32768
+        if abs(used - used0) >= thresh:
+            ram_active = 1
+        if ops >= ops0 and (ops - ops0) >= 16:
+            disk_io = 1
+
+print("ram_active %d" % ram_active)
+print("disk_io %d" % disk_io)
 PY
 fi
 

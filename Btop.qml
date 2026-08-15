@@ -24,12 +24,14 @@ BarWidget {
   property string gpuText: "n/a"
   property string gpuName: "GPU"
   property string gpuKind: "render"
+  property bool ramActive: false
+  property bool diskActive: false
   property var disks: []
 
   readonly property int cpuPct: parseInt(cpuText, 10) || 0
   readonly property int gpuPct: gpuText === "n/a" ? -1 : (parseInt(gpuText, 10) || 0)
 
-  // Same shape as omarchy.power: verb-ing lines, swapped on a fade.
+  // Status lines rotate with a fade, like the Power panel.
   readonly property var idlePhrases: [
     "Sipping cycles",
     "Idling cores",
@@ -66,13 +68,36 @@ BarWidget {
     "Unrolling attention",
     "Chewing context"
   ]
+  readonly property var ramPhrases: [
+    "Hoarding pages",
+    "Stuffing DIMMs",
+    "Packing bytes",
+    "Cramming caches",
+    "Sitting on RAM"
+  ]
+  readonly property var storagePhrases: [
+    "Cramming sectors",
+    "Hoarding blocks",
+    "Packing the drive",
+    "Eating free space",
+    "Crowding the disk"
+  ]
 
   readonly property var activePhrases: {
-    if (gpuPct >= 50 && gpuKind === "infer") return inferPhrases
-    if (gpuPct >= 50) return gpuPhrases
-    if (cpuPct >= 50) return busyPhrases
-    if (cpuPct <= 15 && gpuPct <= 15) return idlePhrases
-    return steadyPhrases
+    var pool = []
+    var i
+    function add(list) {
+      for (i = 0; i < list.length; i++) pool.push(list[i])
+    }
+    // Ambient lines always stay in the mix so one device cannot own the rotation.
+    if (cpuPct <= 15 && gpuPct <= 15) add(idlePhrases)
+    else add(steadyPhrases)
+    if (cpuPct >= 50) add(busyPhrases)
+    if (gpuPct >= 50 && gpuKind === "infer") add(inferPhrases)
+    else if (gpuPct >= 50) add(gpuPhrases)
+    if (ramActive) add(ramPhrases)
+    if (diskActive) add(storagePhrases)
+    return pool
   }
 
   property int phraseIndex: 0
@@ -95,6 +120,8 @@ BarWidget {
     var gpu = "n/a"
     var gpuName = root.gpuName
     var gpuKind = root.gpuKind
+    var ramActive = root.ramActive
+    var diskActive = root.diskActive
 
     for (var i = 0; i < lines.length; i++) {
       var line = String(lines[i]).trim()
@@ -123,6 +150,10 @@ BarWidget {
         if (gn) gpuName = gn
       } else if (key === "gpu_kind" && parts.length > 1) {
         gpuKind = parts[1]
+      } else if (key === "ram_active" && parts.length > 1) {
+        ramActive = parts[1] === "1"
+      } else if (key === "disk_io" && parts.length > 1) {
+        diskActive = parts[1] === "1"
       } else if (key === "disk" && parts.length > 4) {
         var diskPct = Math.max(0, Math.min(100, Math.round(parseFloat(parts[4]) || 0)))
         var model = parts.length > 5 ? parts.slice(5).join(" ") : ""
@@ -140,6 +171,8 @@ BarWidget {
     root.gpuText = gpu
     root.gpuName = gpuName
     root.gpuKind = gpuKind
+    root.ramActive = ramActive
+    root.diskActive = diskActive
     root.disks = disks
   }
 
@@ -155,6 +188,17 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: "󰍛"
+    // Plain centered glyph. The bar's default optical correction shifts this icon right.
+    iconComponent: Component {
+      Text {
+        text: "󰍛"
+        color: button.foreground
+        font.family: button.fontFamily
+        font.pixelSize: button.fontSize
+        horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
+      }
+    }
     onPressed: function(b) { root.launch() }
   }
 
@@ -212,7 +256,7 @@ BarWidget {
     bar: root.bar
     triggerMode: "hover"
     open: buttonHover.hovered || popup.containsMouse
-    contentWidth: popup.fittedContentWidth(Style.space(300))
+    contentWidth: popup.fittedContentWidth(Style.space(380))
     contentHeight: popup.fittedContentHeight(panel.implicitHeight, Style.space(520))
 
     Column {
@@ -244,11 +288,23 @@ BarWidget {
           spacing: Style.space(2)
 
           Text {
-            text: root.cpuName
+            text: "CPU"
             color: root.fg
             font.family: root.fontFamily
             font.pixelSize: Style.font.title
             font.bold: true
+            wrapMode: Text.NoWrap
+            elide: Text.ElideRight
+            width: parent.width
+          }
+
+          Text {
+            visible: root.cpuName !== "" && root.cpuName !== "CPU"
+            text: root.cpuName
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.NoWrap
             elide: Text.ElideRight
             width: parent.width
           }
@@ -260,7 +316,8 @@ BarWidget {
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             font.bold: true
-            font.letterSpacing: 1.2
+            font.letterSpacing: Style.font.caption * 0.12
+            wrapMode: Text.NoWrap
             elide: Text.ElideRight
             width: parent.width
           }
@@ -345,9 +402,9 @@ BarWidget {
 
       SectionBlock {
         icon: "󰢮"
-        title: root.gpuName
+        title: "GPU"
         value: root.gpuText
-        status: root.gpuText === "n/a" ? "GPU stats unavailable" : ""
+        status: root.gpuText === "n/a" ? "GPU stats unavailable" : root.gpuName
         percent: root.gpuText === "n/a" ? -1 : root.gpuPct
       }
 
@@ -419,10 +476,11 @@ BarWidget {
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
         font.bold: true
+        wrapMode: Text.NoWrap
         elide: Text.ElideRight
         anchors.left: secIcon.right
         anchors.leftMargin: Style.space(8)
-        anchors.right: secValue.left
+        anchors.right: secValue.visible ? secValue.left : parent.right
         anchors.rightMargin: Style.space(8)
         anchors.verticalCenter: parent.verticalCenter
       }
@@ -453,7 +511,8 @@ BarWidget {
       text: section.status
       color: root.dim
       font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Style.font.bodySmall
+      wrapMode: Text.NoWrap
       elide: Text.ElideRight
     }
   }
@@ -508,8 +567,9 @@ BarWidget {
         text: statRow.label
         color: root.dim
         font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Style.font.bodySmall
         font.bold: true
+        wrapMode: Text.NoWrap
         elide: Text.ElideRight
         anchors.left: parent.left
         anchors.right: statValue.left
@@ -522,7 +582,7 @@ BarWidget {
         text: statRow.value
         color: root.fg
         font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Style.font.bodySmall
         font.bold: true
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
@@ -545,7 +605,8 @@ BarWidget {
       text: statRow.caption
       color: root.dim
       font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Style.font.bodySmall
+      wrapMode: Text.NoWrap
       elide: Text.ElideRight
     }
   }

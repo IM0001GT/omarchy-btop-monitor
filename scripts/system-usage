@@ -23,6 +23,7 @@
 # BC-250 is a one-off Oberon / Cyan Skillfish board with a nonstandard
 # RDNA 2-ish GPU. The busy sysfs node is ENOTSUPP and gpu_metrics activity
 # stays at 0xFFFF, so fdinfo is the usable load signal on that hardware.
+# Unified memory is soldered GDDR6 with no SPD; DMI type is N/A.
 
 # ---- CPU -------------------------------------------------------------
 
@@ -372,11 +373,14 @@ def load_cache():
     try:
         with open(path, "r", encoding="utf-8") as fh:
             text = fh.read()
-        if "cpu_name " in text and "gpu_name GPU" not in text:
-            return text
+        if "cpu_name " not in text or "gpu_name GPU" in text:
+            return None
+        # Older builds turned inxi "type: N/A" into ram_info N.
+        if re.search(r"(?m)^ram_info N$", text):
+            return None
+        return text
     except OSError:
         return None
-    return None
 
 def save_cache(text):
     path = cache_path()
@@ -450,6 +454,34 @@ def gpu_name():
             return clean_gpu_name(line.split(": ", 1)[1])
     return "GPU"
 
+JUNK_RAM_TYPES = {
+    "unknown", "other", "none", "n/a", "n", "na", "ram", "dimm",
+}
+
+def read_sysfs(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+def is_bc250():
+    for name in ("product_name", "board_name", "product_family"):
+        if re.search(r"BC-?250", read_sysfs("/sys/class/dmi/id/" + name), re.I):
+            return True
+    try:
+        for ent in os.scandir("/sys/bus/pci/devices"):
+            if read_sysfs(os.path.join(ent.path, "device")).lower() != "0x13fe":
+                continue
+            if read_sysfs(os.path.join(ent.path, "vendor")).lower() == "0x1002":
+                return True
+    except OSError:
+        pass
+    return False
+
+def clean_ram_types(types):
+    return [t for t in types if t and t.lower() not in JUNK_RAM_TYPES]
+
 def ram_from_dmidecode(text):
     types, speeds, parts = [], [], []
     block = {}
@@ -459,16 +491,14 @@ def ram_from_dmidecode(text):
         size = block.get("Size", "")
         if not size or size == "No Module Installed":
             return
-        t = block.get("Type", "")
-        if t and t not in ("Unknown", "Other"):
-            types.append(t)
+        types.extend(clean_ram_types([block.get("Type", "")]))
         speed = block.get("Configured Memory Speed") or block.get("Configured Clock Speed") or block.get("Speed")
         if speed:
             m = re.search(r"(\d+)\s*MT/s", speed)
             if m:
                 speeds.append(m.group(1))
         part = block.get("Part Number", "")
-        if part and part not in ("Unknown", "Not Specified", "NO DIMM"):
+        if part and part not in ("Unknown", "Not Specified", "NO DIMM", "N/A"):
             parts.append(part.strip())
 
     for line in text.splitlines():
@@ -483,13 +513,18 @@ def ram_from_dmidecode(text):
     return types, speeds, parts
 
 def ram_from_inxi(text):
-    types = re.findall(r"type:\s*([A-Za-z0-9]+)", text)
-    types = [t for t in types if t.lower() not in ("none", "unknown")]
+    types = clean_ram_types(re.findall(r"type:\s*([A-Za-z0-9/+-]+)", text))
     actuals = re.findall(r"actual:\s*([\d.]+)\s*MT/s", text)
     specs = re.findall(r"spec:\s*([\d.]+)\s*MT/s", text)
-    return types, actuals or specs, []
+    speeds = re.findall(r"speed:\s*([\d.]+)\s*MT/s", text)
+    return types, actuals or specs or speeds, []
 
 def ram_info():
+    # Soldered Cyan Skillfish memory has no SPD. DMI Type is N/A; one slot
+    # reports 1750 MT/s (the GDDR command clock). Published BC-250 spec is
+    # 16 GB unified GDDR6 at 14 Gbps (1750 MHz × 8).
+    if is_bc250():
+        return "GDDR6 14 Gbps"
     texts = []
     for cmd in (
         ["dmidecode", "-t", "memory"],

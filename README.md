@@ -21,6 +21,8 @@ The ASRock BC-250 is a cut-down Oberon / Cyan Skillfish board with a nonstandard
 
 Ordinary Radeons still use the sysfs busy node. On the BC-250 the plugin falls back to `/proc/*/fdinfo` `drm-engine-*` time.
 
+The 16 GB of unified memory is soldered GDDR6, not DIMMs, so `dmidecode` / `inxi` report `type: N/A` (the panel used to show a lone **N**) and a single `1750 MT/s` command clock. There is no SPD to read. On PCI `1002:13fe` / DMI `BC-250` the widget uses the published board spec instead: **GDDR6 14 Gbps**.
+
 ## Install
 
 Omarchy plugins run as unsandboxed code inside `omarchy-shell`. Only add repos you trust.

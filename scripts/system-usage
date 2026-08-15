@@ -375,8 +375,9 @@ def load_cache():
             text = fh.read()
         if "cpu_name " not in text or "gpu_name GPU" in text:
             return None
-        # Older builds turned inxi "type: N/A" into ram_info N.
-        if re.search(r"(?m)^ram_info N$", text):
+        # Older builds turned inxi "type: N/A" into ram_info N,
+        # or labeled BC-250 memory in Gbps instead of MT/s.
+        if re.search(r"(?m)^ram_info (N|GDDR6 14 Gbps)$", text):
             return None
         return text
     except OSError:
@@ -521,10 +522,10 @@ def ram_from_inxi(text):
 
 def ram_info():
     # Soldered Cyan Skillfish memory has no SPD. DMI Type is N/A; one slot
-    # reports 1750 MT/s (the GDDR command clock). Published BC-250 spec is
-    # 16 GB unified GDDR6 at 14 Gbps (1750 MHz × 8).
+    # reports 1750 MT/s (the GDDR command clock). Published spec is 14 Gbps
+    # per pin, which is 14000 MT/s — same unit as DDR4-3200 / DDR5-4800.
     if is_bc250():
-        return "GDDR6 14 Gbps"
+        return "GDDR6 14000 MT/s"
     texts = []
     for cmd in (
         ["dmidecode", "-t", "memory"],

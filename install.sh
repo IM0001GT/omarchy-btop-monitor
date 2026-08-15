@@ -228,5 +228,5 @@ echo
 echo "Done. 'btop System Monitor' is now a bar widget at the far right."
 echo "  Hover the CPU icon -> CPU per core, RAM, GPU, and storage."
 echo "  Click the icon     -> launch/focus btop."
-echo "  GPU source:        DRM fdinfo / vendor sysfs (no perf_event_paranoid change)"
+echo "  GPU source:        DRM fdinfo / vendor sysfs"
 echo "  Uninstall: omarchy plugin remove $PLUGIN_ID"

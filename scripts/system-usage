@@ -14,8 +14,7 @@
 #   DRM    -> /proc/*/fdinfo drm-engine-* (Intel i915/xe, and AMD when
 #             sysfs busy is ENOTSUPP such as the BC-250 / Cyan Skillfish)
 #   Intel  -> RC6 residency if fdinfo is empty
-#   last   -> intel_gpu_top only if it already works; we never change
-#             kernel.perf_event_paranoid
+#   last   -> intel_gpu_top only if it already works on this system
 #
 # BC-250 is a one-off Oberon / Cyan Skillfish board with a nonstandard
 # RDNA 2-ish GPU. The busy sysfs node is ENOTSUPP and gpu_metrics activity
@@ -89,14 +88,15 @@ awk '
 # ---- GPU -------------------------------------------------------------
 
 # Only talk to nvidia-smi when the kernel driver is actually bound.
-# A leftover nvidia-smi (common on Omarchy) can block for several seconds
-# and stall the hover panel.
+# A leftover nvidia-smi binary with no driver can block for several seconds.
 gpu_from_nvidia() {
   [[ -r /proc/driver/nvidia/version ]] || return 1
   command -v nvidia-smi >/dev/null 2>&1 || return 1
-  command -v timeout >/dev/null 2>&1 || return 1
-  local vals max="" v
-  vals=$(timeout 0.4 nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null || true)
+  local vals max="" v cmd=(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits)
+  if command -v timeout >/dev/null 2>&1; then
+    cmd=(timeout 0.4 "${cmd[@]}")
+  fi
+  vals=$("${cmd[@]}" 2>/dev/null || true)
   while IFS= read -r v; do
     v=${v//[^0-9]/}
     if [[ -n $v && ( -z $max || v -gt max ) ]]; then
@@ -143,17 +143,27 @@ gpu_from_amd() {
 
 # Unprivileged DRM sample for Intel (i915/xe) and for AMD chips whose
 # gpu_busy_percent node exists but cannot be read (BC-250 / Cyan Skillfish).
-# Headline % prefers Render/3D (render/gfx/compute), matching the number
-# btop shows as GPU load. Video/copy engines are ignored unless those
-# 3D engines are missing. The previous snapshot is reused so the window
-# is the widget interval (~2s), not a 200ms burst.
+# Headline % prefers Render/3D (render/gfx/compute). Video/copy engines
+# are ignored unless those 3D engines are missing. The previous snapshot
+# is reused so the window is the widget interval (~2s), not a 200ms burst.
 gpu_from_drm() {
   command -v python3 >/dev/null 2>&1 || return 1
   local out
   out=$(python3 - <<'PY'
 import glob, os, time
 
-STATE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "btop-monitor-gpu.state")
+def state_path():
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime:
+        return os.path.join(runtime, "btop-monitor-gpu.state")
+    cache = os.path.join(os.path.expanduser("~"), ".cache", "btop-monitor")
+    try:
+        os.makedirs(cache, mode=0o700, exist_ok=True)
+    except OSError:
+        return None
+    return os.path.join(cache, "gpu.state")
+
+STATE = state_path()
 PREFERRED = {"render", "gfx", "compute"}
 
 def snap_fdinfo():
@@ -214,6 +224,8 @@ def snap_rc6():
     return vals
 
 def load_state():
+    if not STATE:
+        return None
     try:
         with open(STATE, "r", encoding="utf-8") as fh:
             lines = fh.read().splitlines()
@@ -238,9 +250,12 @@ def load_state():
     return t_ns, clients, rc6
 
 def save_state(t_ns, clients, rc6):
+    if not STATE:
+        return
     tmp = STATE + ".tmp"
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write("%d\n" % t_ns)
             for path, val in rc6.items():
                 fh.write("%s %d\n" % (path, val))
@@ -249,7 +264,10 @@ def save_state(t_ns, clients, rc6):
                     fh.write("%s %s %d\n" % (key, name, ns))
         os.replace(tmp, STATE)
     except OSError:
-        pass
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 def fdinfo_pct(before, after, dt_ns):
     if dt_ns <= 0 or not after:

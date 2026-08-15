@@ -13,16 +13,13 @@ GPU sampling works on Intel (DRM fdinfo / RC6 sysfs), NVIDIA (`nvidia-smi`), and
 
 ## BC-250 note
 
-The [ASRock BC-250](https://www.asrock.com/) is a one-off piece of hardware: a cut-down PS5 Oberon / Cyan Skillfish APU sold as a mining board, with a nonstandard RDNA 2-ish GPU (`1002:13fe`) that Linux treats as an integrated `amdgpu` device. It is not a regular desktop Radeon. SMU telemetry on this chip is incomplete, so a lot of the usual AMD monitoring stack only half-works.
+The ASRock BC-250 is a cut-down Oberon / Cyan Skillfish board with a nonstandard RDNA 2-ish GPU (`1002:13fe`). Linux binds it as `amdgpu`, but SMU telemetry is incomplete:
 
-What we hit on Omarchy:
-
-- `/sys/class/drm/card*/device/gpu_busy_percent` **exists** but `read()` returns `ENOTSUPP`
-- `gpu_metrics` v2.2 is readable, but `average_gfx_activity` stays at `0xFFFF` (the well-known MangoHud “655%” bug)
+- `/sys/class/drm/card*/device/gpu_busy_percent` exists, but `read()` returns `ENOTSUPP`
+- `gpu_metrics` `average_gfx_activity` stays at `0xFFFF`
 - `radeontop` reports an unknown card and a stuck `0%`
-- leftover `nvidia-smi` (from `nvidia-utils` on Omarchy) fails because there is no NVIDIA driver
 
-This plugin still prefers the normal AMD sysfs busy node so ordinary Radeons keep working. On the BC-250 that node is a dead end, so we fall back to `/proc/*/fdinfo` `drm-engine-*` time — the same busy signal `nvtop` / `btop` use when the SMU field is junk. Load tracking is in good shape; clocks, power, and VRAM from hwmon were already fine. Full “desktop Radeon” support is not a realistic goal for this chip, but we are filling in the gaps that actually show up on the bar.
+Ordinary Radeons still use the sysfs busy node. On the BC-250 the plugin falls back to `/proc/*/fdinfo` `drm-engine-*` time.
 
 ## Install
 

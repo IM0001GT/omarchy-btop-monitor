@@ -34,18 +34,18 @@ BarWidget {
       var parts = line.split(/\s+/)
       var key = parts[0]
 
-      if (key === "cpu") {
+      if (key === "cpu" && parts.length > 1) {
         cpu = parts[1] + "%"
-      } else if (key === "core") {
+      } else if (key === "core" && parts.length > 2) {
         var pct = parseFloat(parts[2])
         if (isFinite(pct)) cores.push({ core: parseInt(parts[1], 10), percent: Math.max(0, Math.min(100, Math.round(pct))) })
-      } else if (key === "ram") {
+      } else if (key === "ram" && parts.length > 3) {
         ramUsed = parts[1]
         ramTotal = parts[2]
         ramPct = Math.max(0, Math.min(100, Math.round(parseFloat(parts[3]) || 0)))
-      } else if (key === "gpu") {
+      } else if (key === "gpu" && parts.length > 1) {
         gpu = parts[1] === "n/a" ? "n/a" : Math.max(0, Math.min(100, Math.round(parseFloat(parts[1]) || 0))) + "%"
-      } else if (key === "disk") {
+      } else if (key === "disk" && parts.length > 4) {
         var diskPct = Math.max(0, Math.min(100, Math.round(parseFloat(parts[4]) || 0)))
         disks.push({ mount: parts[1], used: parts[2], total: parts[3], percent: diskPct })
       }
@@ -212,7 +212,7 @@ BarWidget {
         label: "GPU"
         value: root.gpuText
         percent: root.gpuText === "n/a" ? -1 : parseInt(root.gpuText, 10)
-        caption: root.gpuText === "n/a" ? "no GPU monitoring tool available" : ""
+        caption: root.gpuText === "n/a" ? "GPU stats unavailable" : ""
       }
 
       PanelSeparator {

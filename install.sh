@@ -12,7 +12,7 @@
 #        Intel  -> intel-gpu-tools, and sets kernel.perf_event_paranoid=0
 #                 (persisted in /etc/sysctl.d/99-omarchy-btop-monitor.conf)
 #        NVIDIA -> nvidia-utils (only if nvidia-smi is missing)
-#        AMD    -> nothing (utilization comes from kernel sysfs)
+#        AMD    -> nothing (sysfs busy percent, or DRM fdinfo on BC-250)
 #   3. Unless --deps is set, installs the plugin and enables it as a bar
 #      widget, rightmost in the right section.
 #
@@ -138,7 +138,7 @@ for vendor in "${vendors[@]}"; do
       fi
       ;;
     amd)
-      echo "AMD: GPU utilization is read from kernel sysfs; no extra package needed."
+      echo "AMD: utilization from sysfs, or DRM fdinfo if busy percent is unsupported; no extra package needed."
       ;;
     *)
       echo "Unknown GPU vendor: the widget falls back to whatever GPU tool works at runtime."

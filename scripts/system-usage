@@ -12,6 +12,11 @@
 #   NVIDIA -> nvidia-smi (nvidia-utils; skipped if the driver is not talking)
 #   Intel  -> intel_gpu_top (intel-gpu-tools; needs kernel.perf_event_paranoid <= 0)
 #   AMD    -> kernel sysfs gpu_busy_percent (amdgpu, no extra package)
+#   DRM    -> /proc/*/fdinfo drm-engine-* (BC-250 / Cyan Skillfish fallback)
+#
+# BC-250 is a one-off Oberon / Cyan Skillfish board with a nonstandard
+# RDNA 2-ish GPU. The busy sysfs node is ENOTSUPP and gpu_metrics activity
+# stays at 0xFFFF, so fdinfo is the usable load signal on that hardware.
 
 # ---- CPU -------------------------------------------------------------
 
@@ -128,12 +133,97 @@ gpu_from_amd() {
   return 1
 }
 
+# Cyan Skillfish / BC-250: gpu_busy_percent exists but read() is ENOTSUPP,
+# and gpu_metrics.average_gfx_activity stays at 0xFFFF. Per-client DRM
+# engine time in fdinfo is the usable busy signal.
+gpu_from_fdinfo() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  local out
+  out=$(python3 - <<'PY'
+import glob, time
+
+ENGINES = (
+    "drm-engine-gfx",
+    "drm-engine-compute",
+    "drm-engine-render",
+    "drm-engine-gpu",
+)
+
+def snapshot():
+    clients = {}
+    for path in glob.glob("/proc/[0-9]*/fdinfo/[0-9]*"):
+        try:
+            with open(path, "r", errors="ignore") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        if "drm-engine-" not in text:
+            continue
+        pid = path.split("/")[2]
+        client = None
+        engines = {}
+        for line in text.splitlines():
+            if line.startswith("drm-client-id:"):
+                client = line.split(":", 1)[1].strip()
+                continue
+            for name in ENGINES:
+                if line.startswith(name + ":"):
+                    try:
+                        engines[name] = int(line.split(":", 1)[1].split()[0])
+                    except ValueError:
+                        pass
+        if not engines:
+            continue
+        slot = clients.setdefault((pid, client or path), {})
+        for name, ns in engines.items():
+            if ns > slot.get(name, -1):
+                slot[name] = ns
+    return clients
+
+def engine_totals(snap, keys):
+    totals = {}
+    for key in keys:
+        for name, ns in snap[key].items():
+            totals[name] = totals.get(name, 0) + ns
+    return totals
+
+first = snapshot()
+t0 = time.monotonic_ns()
+time.sleep(0.25)
+second = snapshot()
+dt = time.monotonic_ns() - t0
+if dt <= 0:
+    raise SystemExit(1)
+
+shared = first.keys() & second.keys()
+if not shared:
+    raise SystemExit(1)
+
+before = engine_totals(first, shared)
+after = engine_totals(second, shared)
+best = 0.0
+for name, later in after.items():
+    earlier = before.get(name)
+    if earlier is None or later < earlier:
+        continue
+    pct = (later - earlier) / dt * 100.0
+    if pct > best:
+        best = pct
+
+print("gpu %d fdinfo" % max(0, min(100, round(best))))
+PY
+) || true
+  [[ $out == gpu* ]] || return 1
+  printf '%s\n' "$out"
+}
+
 # Prefer a tool that actually returns a sample. A leftover nvidia-smi (or
 # intel_gpu_top without PMU access) must not hide a working fallback.
 gpu_report() {
   gpu_from_nvidia && return
   gpu_from_intel && return
   gpu_from_amd && return
+  gpu_from_fdinfo && return
   echo "gpu n/a"
 }
 

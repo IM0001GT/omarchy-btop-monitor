@@ -9,7 +9,7 @@ Omarchy Quattro dropped the stock btop widget from the default bar. This third-p
 | Hover the CPU icon | Popup with CPU (overall + per core), RAM, GPU, and each disk |
 | Click the icon | Launch or focus `btop` |
 
-GPU sampling works on Intel (`intel_gpu_top`), NVIDIA (`nvidia-smi`), and AMD (`gpu_busy_percent`, then DRM fdinfo). Hybrid laptops use the first tool that actually returns a reading.
+GPU sampling works on Intel (DRM fdinfo / RC6 sysfs), NVIDIA (`nvidia-smi`), and AMD (`gpu_busy_percent`, then DRM fdinfo). Hybrid laptops use the first tool that actually returns a reading. Intel does **not** change `kernel.perf_event_paranoid`.
 
 ## BC-250 note
 
@@ -34,13 +34,13 @@ omarchy plugin add https://github.com/IM0001GT/omarchy-btop-monitor --enable
 
 That clones the plugin into `~/.config/omarchy/plugins/btop-monitor/`, validates the manifest, and can drop it on the bar.
 
-For Intel or NVIDIA GPU numbers in the hover panel, also install the vendor tools:
+Intel and AMD need no extra packages. On NVIDIA, if `nvidia-smi` is missing:
 
 ```bash
 ~/.config/omarchy/plugins/btop-monitor/install.sh --deps
 ```
 
-`--deps` is optional. Without it the widget still works; GPU just shows `n/a` until a sampler is available.
+`--deps` is optional. Without it the widget still works; a missing NVIDIA tool just shows `n/a` for GPU. If you installed an older version that set `kernel.perf_event_paranoid=0`, run `--deps` once to remove that drop-in.
 
 ### One-shot from a clone
 
@@ -52,7 +52,7 @@ cd omarchy-btop-monitor
 ./install.sh
 ```
 
-That installs GPU tools, adds the plugin, and places it rightmost in the right section (after `omarchy.power`).
+That adds the plugin, places it rightmost in the right section (after `omarchy.power`), and installs NVIDIA tools only if needed.
 
 ## Update
 
@@ -68,11 +68,17 @@ omarchy plugin update btop-monitor
 omarchy plugin remove btop-monitor
 ```
 
-GPU packages and the optional sysctl drop-in are left in place. To drop the Intel sampling sysctl too:
+Current releases do not leave a sysctl drop-in. If an older install set `kernel.perf_event_paranoid=0`, remove it with:
 
 ```bash
-sudo rm -f /etc/sysctl.d/99-omarchy-btop-monitor.conf
-sudo sysctl --system
+~/.config/omarchy/plugins/btop-monitor/install.sh --deps
+```
+
+or by hand:
+
+```bash
+sudo rm -f /etc/sysctl.d/99-omarchy-btop-monitor.conf /etc/sysctl.d/50-perf-event.conf
+sudo sysctl -w kernel.perf_event_paranoid=2
 ```
 
 ## Requirements
@@ -80,15 +86,13 @@ sudo sysctl --system
 - [Omarchy](https://omarchy.org/) with the shell plugin CLI (`omarchy plugin add`)
 - `btop` (already on Omarchy)
 - `jq` (already on Omarchy)
-- Optional GPU tools, installed by `./install.sh --deps`:
+- Optional NVIDIA tools, installed by `./install.sh --deps` only when `nvidia-smi` is missing:
 
 | GPU | Extra package | Notes |
 | --- | --- | --- |
-| Intel | `intel-gpu-tools` (+ `python`) | Sets `kernel.perf_event_paranoid=0` so `intel_gpu_top` can read the i915 PMU |
+| Intel | none | DRM fdinfo engine busy, then RC6 residency. No `kernel.perf_event_paranoid` change |
 | NVIDIA | `nvidia-utils` | Only if `nvidia-smi` is missing |
 | AMD | none | Prefers `/sys/class/drm/card*/device/gpu_busy_percent`. If that node is missing or `ENOTSUPP` (BC-250), falls back to DRM fdinfo engine time. |
-
-Setting `kernel.perf_event_paranoid=0` lets unprivileged processes read CPU performance counters. That is required for `intel_gpu_top` as a regular user. Skip `--deps` if you do not want that change.
 
 ## Layout
 

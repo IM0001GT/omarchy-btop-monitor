@@ -10,9 +10,12 @@
 #
 # GPU source is the first tool that actually returns a sample:
 #   NVIDIA -> nvidia-smi (nvidia-utils; skipped if the driver is not talking)
-#   Intel  -> intel_gpu_top (intel-gpu-tools; needs kernel.perf_event_paranoid <= 0)
 #   AMD    -> kernel sysfs gpu_busy_percent (amdgpu, no extra package)
-#   DRM    -> /proc/*/fdinfo drm-engine-* (BC-250 / Cyan Skillfish fallback)
+#   DRM    -> /proc/*/fdinfo drm-engine-* (Intel i915/xe, and AMD when
+#             sysfs busy is ENOTSUPP such as the BC-250 / Cyan Skillfish)
+#   Intel  -> RC6 residency if fdinfo is empty
+#   last   -> intel_gpu_top only if it already works; we never change
+#             kernel.perf_event_paranoid
 #
 # BC-250 is a one-off Oberon / Cyan Skillfish board with a nonstandard
 # RDNA 2-ish GPU. The busy sysfs node is ENOTSUPP and gpu_metrics activity
@@ -99,7 +102,7 @@ gpu_from_nvidia() {
   echo "gpu $max"
 }
 
-gpu_from_intel() {
+gpu_from_intel_gpu_top() {
   command -v intel_gpu_top >/dev/null 2>&1 || return 1
   command -v python3 >/dev/null 2>&1 || return 1
   local out
@@ -133,86 +136,118 @@ gpu_from_amd() {
   return 1
 }
 
-# Cyan Skillfish / BC-250: gpu_busy_percent exists but read() is ENOTSUPP,
-# and gpu_metrics.average_gfx_activity stays at 0xFFFF. Per-client DRM
-# engine time in fdinfo is the usable busy signal.
-gpu_from_fdinfo() {
+# Unprivileged DRM sample for Intel (i915/xe) and for AMD chips whose
+# gpu_busy_percent node exists but cannot be read (BC-250 / Cyan Skillfish).
+# Uses the same /proc fdinfo engine counters nvtop/btop use. RC6 is an
+# Intel-only fallback. Neither path needs perf_event_paranoid.
+gpu_from_drm() {
   command -v python3 >/dev/null 2>&1 || return 1
   local out
   out=$(python3 - <<'PY'
-import glob, time
+import glob, os, time
 
-ENGINES = (
-    "drm-engine-gfx",
-    "drm-engine-compute",
-    "drm-engine-render",
-    "drm-engine-gpu",
-)
-
-def snapshot():
+def snap_fdinfo():
     clients = {}
-    for path in glob.glob("/proc/[0-9]*/fdinfo/[0-9]*"):
+    try:
+        pids = os.listdir("/proc")
+    except OSError:
+        return clients
+    for pid in pids:
+        if not pid.isdigit():
+            continue
+        fd_dir = "/proc/%s/fd" % pid
+        info_dir = "/proc/%s/fdinfo" % pid
         try:
-            with open(path, "r", errors="ignore") as fh:
-                text = fh.read()
+            fds = os.listdir(fd_dir)
         except OSError:
             continue
-        if "drm-engine-" not in text:
-            continue
-        pid = path.split("/")[2]
-        client = None
-        engines = {}
-        for line in text.splitlines():
-            if line.startswith("drm-client-id:"):
-                client = line.split(":", 1)[1].strip()
+        for fd in fds:
+            try:
+                tgt = os.readlink(os.path.join(fd_dir, fd))
+            except OSError:
                 continue
-            for name in ENGINES:
-                if line.startswith(name + ":"):
-                    try:
-                        engines[name] = int(line.split(":", 1)[1].split()[0])
-                    except ValueError:
-                        pass
-        if not engines:
-            continue
-        slot = clients.setdefault((pid, client or path), {})
-        for name, ns in engines.items():
-            if ns > slot.get(name, -1):
-                slot[name] = ns
+            if "/dri/" not in tgt and not tgt.startswith("/dev/dri"):
+                continue
+            try:
+                with open(os.path.join(info_dir, fd), "r", errors="ignore") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            if "drm-engine-" not in text:
+                continue
+            client = None
+            for line in text.splitlines():
+                if line.startswith("drm-client-id:"):
+                    client = line.split(":", 1)[1].strip()
+                elif line.startswith("drm-engine-") and not line.startswith("drm-engine-capacity-"):
+                    name = line.split(":", 1)[0][len("drm-engine-"):]
+                    digits = "".join(c for c in line.split(":", 1)[1] if c.isdigit())
+                    if not digits:
+                        continue
+                    ns = int(digits)
+                    key = (pid, client or fd)
+                    engines = clients.setdefault(key, {})
+                    if ns > engines.get(name, 0):
+                        engines[name] = ns
     return clients
 
-def engine_totals(snap, keys):
+def snap_rc6():
+    vals = {}
+    for path in glob.glob("/sys/class/drm/card*/gt/gt*/rc6_residency_ms"):
+        enable = path.replace("rc6_residency_ms", "rc6_enable")
+        try:
+            if os.path.exists(enable) and int(open(enable).read().strip()) == 0:
+                continue
+            vals[path] = int(open(path).read().strip())
+        except (OSError, ValueError):
+            continue
+    return vals
+
+def fdinfo_pct(before, after, dt_ns):
+    if dt_ns <= 0 or not after:
+        return None
     totals = {}
-    for key in keys:
-        for name, ns in snap[key].items():
-            totals[name] = totals.get(name, 0) + ns
-    return totals
+    for key, engines in after.items():
+        prev = before.get(key, {})
+        for name, ns in engines.items():
+            delta = ns - prev.get(name, ns)
+            if delta > 0:
+                totals[name] = totals.get(name, 0) + delta
+    if not any(engines for engines in after.values()):
+        return None
+    if not totals:
+        return 0
+    return max(0, min(100, round(max(totals.values()) * 100 / dt_ns)))
 
-first = snapshot()
-t0 = time.monotonic_ns()
-time.sleep(0.25)
-second = snapshot()
-dt = time.monotonic_ns() - t0
-if dt <= 0:
-    raise SystemExit(1)
+def rc6_pct(before, after, dt_ms):
+    if dt_ms <= 0 or not after:
+        return None
+    best = None
+    for path, end in after.items():
+        start = before.get(path)
+        if start is None:
+            continue
+        idle = (end - start) * 100 / dt_ms
+        busy = max(0, min(100, round(100 - idle)))
+        best = busy if best is None else max(best, busy)
+    return best
 
-shared = first.keys() & second.keys()
-if not shared:
-    raise SystemExit(1)
+t0 = time.monotonic()
+fd0, rc0 = snap_fdinfo(), snap_rc6()
+time.sleep(0.2)
+t1 = time.monotonic()
+fd1, rc1 = snap_fdinfo(), snap_rc6()
+dt_ns = (t1 - t0) * 1e9
+dt_ms = (t1 - t0) * 1000
 
-before = engine_totals(first, shared)
-after = engine_totals(second, shared)
-best = 0.0
-for name, later in after.items():
-    earlier = before.get(name)
-    if earlier is None or later < earlier:
-        continue
-    pct = (later - earlier) / dt * 100.0
-    if pct > best:
-        best = pct
-
-print("gpu %d fdinfo" % max(0, min(100, round(best))))
+pct = fdinfo_pct(fd0, fd1, dt_ns)
+if pct is None:
+    pct = rc6_pct(rc0, rc1, dt_ms)
+if pct is None:
+    raise SystemExit(0)
+print("gpu %d" % pct)
 PY
-) || true
+)
   [[ $out == gpu* ]] || return 1
   printf '%s\n' "$out"
 }
@@ -221,9 +256,9 @@ PY
 # intel_gpu_top without PMU access) must not hide a working fallback.
 gpu_report() {
   gpu_from_nvidia && return
-  gpu_from_intel && return
   gpu_from_amd && return
-  gpu_from_fdinfo && return
+  gpu_from_drm && return
+  gpu_from_intel_gpu_top && return
   echo "gpu n/a"
 }
 

@@ -8,12 +8,10 @@
 #
 # This script:
 #   1. Detects GPU vendor(s) via lspci (Intel / NVIDIA / AMD; hybrid OK).
-#   2. Installs the GPU monitoring tool each vendor needs (sudo):
-#        Intel  -> intel-gpu-tools, and sets kernel.perf_event_paranoid=0
-#                 (persisted in /etc/sysctl.d/99-omarchy-btop-monitor.conf)
-#        NVIDIA -> nvidia-utils (only if nvidia-smi is missing)
-#        AMD    -> nothing (sysfs busy percent, or DRM fdinfo on BC-250)
-#   3. Unless --deps is set, installs the plugin and enables it as a bar
+#   2. Installs optional NVIDIA tools (sudo) if nvidia-smi is missing.
+#      Intel and AMD need no extra packages and no sysctl changes.
+#   3. Removes any older btop-monitor perf_event_paranoid drop-in.
+#   4. Unless --deps is set, installs the plugin and enables it as a bar
 #      widget, rightmost in the right section.
 #
 # Run it as your normal user; it calls sudo for the privileged steps.
@@ -30,7 +28,7 @@ Usage: ./install.sh [--deps] [-h|--help]
 
 Install the btop-monitor Omarchy bar widget and optional GPU tools.
 
-  --deps        Install GPU monitoring packages / sysctl only
+  --deps        Install optional NVIDIA tools; remove old sysctl drop-ins
   -h, --help    Show this help
 
 Preferred install (git-managed, updates via omarchy plugin update):
@@ -106,28 +104,35 @@ gpu_vendors() {
 mapfile -t vendors < <(gpu_vendors)
 echo "Detected GPU vendor(s): ${vendors[*]}"
 
+remove_legacy_perf_sysctl() {
+  local f changed=0
+  for f in /etc/sysctl.d/99-omarchy-btop-monitor.conf /etc/sysctl.d/50-perf-event.conf; do
+    [[ -f $f ]] || continue
+    if awk '
+      BEGIN { ours = 0 }
+      /^[[:space:]]*$/ { next }
+      /^[[:space:]]*#/ { next }
+      $0 == "kernel.perf_event_paranoid=0" { ours = 1; next }
+      { exit 2 }
+      END { exit ours ? 0 : 1 }
+    ' "$f"; then
+      echo "Removing leftover perf_event_paranoid drop-in $f"
+      privileged rm -f "$f"
+      changed=1
+    fi
+  done
+  if (( changed )); then
+    echo "Restoring kernel.perf_event_paranoid to the system default (2)."
+    privileged sysctl -w kernel.perf_event_paranoid=2 >/dev/null
+  fi
+}
+
+remove_legacy_perf_sysctl
+
 for vendor in "${vendors[@]}"; do
   case "$vendor" in
     intel)
-      if ! command -v intel_gpu_top >/dev/null 2>&1; then
-        echo "Installing intel-gpu-tools ..."
-        privileged pacman -S --needed --noconfirm intel-gpu-tools
-      else
-        echo "intel-gpu-tools already installed."
-      fi
-      if ! command -v python3 >/dev/null 2>&1; then
-        echo "Installing python (needed to parse intel_gpu_top JSON) ..."
-        privileged pacman -S --needed --noconfirm python
-      fi
-      # intel_gpu_top reads the i915 PMU, which needs CPU event access.
-      if [[ $(sysctl -n kernel.perf_event_paranoid 2>/dev/null || echo 2) -gt 0 ]]; then
-        echo "Setting kernel.perf_event_paranoid=0 (persisted in /etc/sysctl.d/99-omarchy-btop-monitor.conf)"
-        echo "This lets unprivileged processes read CPU performance counters so intel_gpu_top can sample the GPU."
-        echo 'kernel.perf_event_paranoid=0' | privileged tee /etc/sysctl.d/99-omarchy-btop-monitor.conf >/dev/null
-        privileged sysctl -w kernel.perf_event_paranoid=0 >/dev/null
-      else
-        echo "kernel.perf_event_paranoid already allows GPU sampling."
-      fi
+      echo "Intel: GPU utilization is read from DRM fdinfo / RC6 sysfs; no extra package or sysctl needed."
       ;;
     nvidia)
       if ! command -v nvidia-smi >/dev/null 2>&1; then
@@ -148,9 +153,7 @@ done
 
 if (( DEPS_ONLY )); then
   echo
-  echo "GPU dependencies done. Enable the widget with:"
-  echo "  omarchy plugin add https://github.com/IM0001GT/omarchy-btop-monitor --enable"
-  echo "  or: omarchy plugin enable $PLUGIN_ID --after omarchy.power"
+  echo "Dependency step done (Intel/AMD need nothing; NVIDIA only if nvidia-smi was missing)."
   exit 0
 fi
 
@@ -225,5 +228,5 @@ echo
 echo "Done. 'btop System Monitor' is now a bar widget at the far right."
 echo "  Hover the CPU icon -> CPU per core, RAM, GPU, and storage."
 echo "  Click the icon     -> launch/focus btop."
-echo "  GPU tool in use:   $(command -v nvidia-smi >/dev/null && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || command -v intel_gpu_top || echo 'sysfs (AMD) / none')"
+echo "  GPU source:        DRM fdinfo / vendor sysfs (no perf_event_paranoid change)"
 echo "  Uninstall: omarchy plugin remove $PLUGIN_ID"

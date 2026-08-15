@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Sample system usage in one shot for the btop-monitor bar widget hover panel.
+# Sample system usage in one shot for the Hardware Tooltip hover panel.
 # Output format (one token per line, whitespace separated):
 #   cpu <overall-percent>
 #   core <index> <percent>        (one line per logical core)
@@ -160,8 +160,8 @@ import glob, os, time
 def state_path():
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime:
-        return os.path.join(runtime, "btop-monitor-gpu.state")
-    cache = os.path.join(os.path.expanduser("~"), ".cache", "btop-monitor")
+        return os.path.join(runtime, "hw-tooltip-gpu.state")
+    cache = os.path.join(os.path.expanduser("~"), ".cache", "hw-tooltip")
     try:
         os.makedirs(cache, mode=0o700, exist_ok=True)
     except OSError:
@@ -353,13 +353,13 @@ gpu_report
 
 if command -v python3 >/dev/null 2>&1; then
   python3 - <<'PY'
-import os, re, subprocess
+import glob, os, re, subprocess
 
 def cache_path():
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime:
-        return os.path.join(runtime, "btop-monitor-hw")
-    cache = os.path.join(os.path.expanduser("~"), ".cache", "btop-monitor")
+        return os.path.join(runtime, "hw-tooltip-hw")
+    cache = os.path.join(os.path.expanduser("~"), ".cache", "hw-tooltip")
     try:
         os.makedirs(cache, mode=0o700, exist_ok=True)
     except OSError:
@@ -441,7 +441,7 @@ def gpu_name():
         except Exception:
             pass
     try:
-        out = subprocess.run(["lspci", "-mm"], capture_output=True, text=True, timeout=1)
+        out = subprocess.run(["lspci", "-mm"], capture_output=True, text=True, timeout=2)
     except Exception:
         return "GPU"
     for line in out.stdout.splitlines():
@@ -636,8 +636,8 @@ import os, re, time
 def state_path():
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime:
-        return os.path.join(runtime, "btop-monitor-activity")
-    cache = os.path.join(os.path.expanduser("~"), ".cache", "btop-monitor")
+        return os.path.join(runtime, "hw-tooltip-activity")
+    cache = os.path.join(os.path.expanduser("~"), ".cache", "hw-tooltip")
     try:
         os.makedirs(cache, mode=0o700, exist_ok=True)
     except OSError:

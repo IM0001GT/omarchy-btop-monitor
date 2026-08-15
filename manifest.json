@@ -1,20 +1,22 @@
 {
   "schemaVersion": 1,
-  "id": "btop-monitor",
-  "name": "btop System Monitor",
-  "version": "1.2.2",
+  "id": "im0001gt.hw-tooltip",
+  "name": "Hardware Tooltip",
+  "version": "1.3.0",
   "author": "IM0001GT",
-  "description": "btop launcher with a CPU/RAM/GPU/storage hover panel",
+  "license": "MIT",
+  "homepage": "https://github.com/IM0001GT/omarchy-hw-tooltip",
+  "description": "Omarchy-native hover panel that names your CPU, RAM, GPU, and disks, then shows live load bars that follow the theme",
   "kinds": [
     "bar-widget"
   ],
   "entryPoints": {
-    "barWidget": "Btop.qml"
+    "barWidget": "HardwareTooltip.qml"
   },
   "barWidget": {
-    "displayName": "btop System Monitor",
-    "description": "btop launcher with a CPU/RAM/GPU/storage hover panel",
-    "category": "System",
+    "displayName": "Hardware Tooltip",
+    "description": "Hover for CPU, RAM, GPU, and storage with real hardware names. Click opens btop.",
+    "category": "Hardware",
     "defaultSection": "right",
     "allowMultiple": false
   }

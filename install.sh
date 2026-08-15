@@ -1,46 +1,46 @@
 #!/bin/bash
 
-# Install the btop-monitor Omarchy shell plugin.
+# Optional helper for Hardware Tooltip.
 #
-# Preferred (git-managed, easy updates):
-#   omarchy plugin add https://github.com/IM0001GT/omarchy-btop-monitor --enable
-#   ./install.sh --deps
+# Preferred install (no root):
+#   omarchy plugin add https://github.com/IM0001GT/omarchy-hw-tooltip --enable
 #
 # This script:
 #   1. Detects GPU vendor(s) via lspci (Intel / NVIDIA / AMD; hybrid OK).
-#   2. Installs optional NVIDIA tools (sudo) if nvidia-smi is missing.
+#   2. With --deps, installs nvidia-utils only if nvidia-smi is missing.
 #      Intel and AMD need no extra packages and no sysctl changes.
-#   3. Removes any older btop-monitor perf_event_paranoid drop-in.
-#   4. Unless --deps is set, installs or updates the plugin, enables it,
-#      and restarts omarchy-shell so the new QML is actually loaded.
+#   3. Removes any leftover perf_event_paranoid drop-in from older builds.
+#   4. Unless --deps is set, enables the widget and restarts omarchy-shell.
 #
-# Run it as your normal user; it calls sudo for the privileged steps.
+# Run it as your normal user; sudo is used only for the optional NVIDIA
+# package and leftover sysctl cleanup.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PLUGIN_ID="btop-monitor"
+PLUGIN_ID="im0001gt.hw-tooltip"
+LEGACY_IDS=(btop-monitor)
 DEPS_ONLY=0
 
 usage() {
   cat <<'EOF'
 Usage: ./install.sh [--deps] [-h|--help]
 
-Install or update the btop-monitor Omarchy bar widget.
+Enable or update Hardware Tooltip, or install optional NVIDIA tools.
 
-  --deps        Install optional NVIDIA tools; remove old sysctl drop-ins
+  --deps        Install nvidia-utils only if nvidia-smi is missing;
+                remove leftover sysctl drop-ins from older builds
   -h, --help    Show this help
 
-Preferred install:
+Preferred install (no root):
 
-  omarchy plugin add https://github.com/IM0001GT/omarchy-btop-monitor --enable
-  ~/.config/omarchy/plugins/btop-monitor/install.sh
+  omarchy plugin add https://github.com/IM0001GT/omarchy-hw-tooltip --enable
 
 A shell restart is required after an update so Quickshell loads the new QML.
 
 Uninstall:
 
-  omarchy plugin remove btop-monitor
+  omarchy plugin remove im0001gt.hw-tooltip
 EOF
 }
 
@@ -78,7 +78,7 @@ fi
 for cmd in lspci pacman jq; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "error: missing required command: $cmd" >&2; exit 1; }
 done
-[[ -f $SCRIPT_DIR/manifest.json && -f $SCRIPT_DIR/Btop.qml && -f $SCRIPT_DIR/scripts/system-usage ]] \
+[[ -f $SCRIPT_DIR/manifest.json && -f $SCRIPT_DIR/HardwareTooltip.qml && -f $SCRIPT_DIR/scripts/system-usage ]] \
   || { echo "error: plugin sources not found next to this script" >&2; exit 1; }
 
 # --- GPU detection -------------------------------------------------------
@@ -145,7 +145,7 @@ for vendor in "${vendors[@]}"; do
       fi
       ;;
     amd)
-      echo "AMD: utilization from sysfs, or DRM fdinfo if busy percent is unsupported; no extra package needed."
+      echo "AMD: utilization from sysfs, or DRM fdinfo if busy percent is unsupported (BC-250); no extra package needed."
       ;;
     *)
       echo "Unknown GPU vendor: the widget falls back to whatever GPU tool works at runtime."
@@ -166,7 +166,7 @@ copy_plugin_files() {
   echo "Installing plugin files to $plugin_dir ..."
   mkdir -p "$plugin_dir/scripts"
   install -m 0644 "$SCRIPT_DIR/manifest.json" "$plugin_dir/manifest.json"
-  install -m 0644 "$SCRIPT_DIR/Btop.qml" "$plugin_dir/Btop.qml"
+  install -m 0644 "$SCRIPT_DIR/HardwareTooltip.qml" "$plugin_dir/HardwareTooltip.qml"
   install -m 0755 "$SCRIPT_DIR/scripts/system-usage" "$plugin_dir/scripts/system-usage"
   chown -R "$real_user:" "$plugin_dir" 2>/dev/null || true
 }
@@ -199,6 +199,14 @@ elif [[ ! -e $plugin_dir ]]; then
 else
   copy_plugin_files
 fi
+
+for legacy in "${LEGACY_IDS[@]}"; do
+  legacy_dir="$real_home/.config/omarchy/plugins/$legacy"
+  if [[ -e $legacy_dir && $legacy_dir != "$plugin_dir" && $legacy_dir != "$SCRIPT_DIR" ]]; then
+    echo "Note: older checkout still at $legacy_dir"
+    echo "      Remove it with: omarchy plugin remove $legacy"
+  fi
+done
 
 # --- discover and enable ---------------------------------------------------
 run_as_user omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
@@ -238,8 +246,7 @@ fi
 reload_shell
 
 echo
-echo "Done. 'btop System Monitor' is now a bar widget at the far right."
-echo "  Hover the CPU icon -> CPU per core, RAM, GPU, and storage."
-echo "  Click the icon     -> launch/focus btop."
-echo "  GPU source:        DRM fdinfo / vendor sysfs"
+echo "Done. Hardware Tooltip is now a bar widget at the far right."
+echo "  Hover the chip icon -> CPU per core, RAM, GPU, and storage."
+echo "  Click the icon      -> launch/focus btop."
 echo "  Uninstall: omarchy plugin remove $PLUGIN_ID"

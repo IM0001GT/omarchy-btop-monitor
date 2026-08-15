@@ -11,6 +11,8 @@ Omarchy Quattro dropped the stock btop widget from the default bar. This third-p
 
 GPU sampling works on Intel (DRM fdinfo / RC6 sysfs), NVIDIA (`nvidia-smi`), and AMD (`gpu_busy_percent`, then DRM fdinfo). Hybrid laptops use the first tool that actually returns a reading. Intel does **not** change `kernel.perf_event_paranoid`.
 
+The hover panel does **not** scrape a running `btop` process — btop has no export API. It samples the same kernel sources itself. For Intel the headline GPU % is Render/3D (`render` / `gfx` / `compute`) averaged over the 2s refresh, which is what btop shows as GPU load. A leftover `nvidia-smi` without a loaded NVIDIA driver is ignored so it cannot stall the panel.
+
 ## BC-250 note
 
 The [ASRock BC-250](https://www.asrock.com/) is a one-off piece of hardware: a cut-down PS5 Oberon / Cyan Skillfish APU sold as a mining board, with a nonstandard RDNA 2-ish GPU (`1002:13fe`) that Linux treats as an integrated `amdgpu` device. It is not a regular desktop Radeon. SMU telemetry on this chip is incomplete, so a lot of the usual AMD monitoring stack only half-works.

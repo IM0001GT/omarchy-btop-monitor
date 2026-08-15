@@ -88,10 +88,15 @@ awk '
 
 # ---- GPU -------------------------------------------------------------
 
+# Only talk to nvidia-smi when the kernel driver is actually bound.
+# A leftover nvidia-smi (common on Omarchy) can block for several seconds
+# and stall the hover panel.
 gpu_from_nvidia() {
+  [[ -r /proc/driver/nvidia/version ]] || return 1
   command -v nvidia-smi >/dev/null 2>&1 || return 1
+  command -v timeout >/dev/null 2>&1 || return 1
   local vals max="" v
-  vals=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null || true)
+  vals=$(timeout 0.4 nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null || true)
   while IFS= read -r v; do
     v=${v//[^0-9]/}
     if [[ -n $v && ( -z $max || v -gt max ) ]]; then
@@ -138,13 +143,18 @@ gpu_from_amd() {
 
 # Unprivileged DRM sample for Intel (i915/xe) and for AMD chips whose
 # gpu_busy_percent node exists but cannot be read (BC-250 / Cyan Skillfish).
-# Uses the same /proc fdinfo engine counters nvtop/btop use. RC6 is an
-# Intel-only fallback. Neither path needs perf_event_paranoid.
+# Headline % prefers Render/3D (render/gfx/compute), matching the number
+# btop shows as GPU load. Video/copy engines are ignored unless those
+# 3D engines are missing. The previous snapshot is reused so the window
+# is the widget interval (~2s), not a 200ms burst.
 gpu_from_drm() {
   command -v python3 >/dev/null 2>&1 || return 1
   local out
   out=$(python3 - <<'PY'
 import glob, os, time
+
+STATE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "btop-monitor-gpu.state")
+PREFERRED = {"render", "gfx", "compute"}
 
 def snap_fdinfo():
     clients = {}
@@ -185,7 +195,7 @@ def snap_fdinfo():
                     if not digits:
                         continue
                     ns = int(digits)
-                    key = (pid, client or fd)
+                    key = "%s:%s" % (pid, client or fd)
                     engines = clients.setdefault(key, {})
                     if ns > engines.get(name, 0):
                         engines[name] = ns
@@ -203,6 +213,44 @@ def snap_rc6():
             continue
     return vals
 
+def load_state():
+    try:
+        with open(STATE, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+    if len(lines) < 2:
+        return None
+    try:
+        t_ns = int(lines[0])
+        rc6 = {}
+        clients = {}
+        for line in lines[1:]:
+            parts = line.split()
+            if len(parts) == 2:
+                rc6[parts[0]] = int(parts[1])
+            elif len(parts) == 3:
+                clients.setdefault(parts[0], {})[parts[1]] = int(parts[2])
+            else:
+                return None
+    except ValueError:
+        return None
+    return t_ns, clients, rc6
+
+def save_state(t_ns, clients, rc6):
+    tmp = STATE + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("%d\n" % t_ns)
+            for path, val in rc6.items():
+                fh.write("%s %d\n" % (path, val))
+            for key, engines in clients.items():
+                for name, ns in engines.items():
+                    fh.write("%s %s %d\n" % (key, name, ns))
+        os.replace(tmp, STATE)
+    except OSError:
+        pass
+
 def fdinfo_pct(before, after, dt_ns):
     if dt_ns <= 0 or not after:
         return None
@@ -217,7 +265,9 @@ def fdinfo_pct(before, after, dt_ns):
         return None
     if not totals:
         return 0
-    return max(0, min(100, round(max(totals.values()) * 100 / dt_ns)))
+    preferred = [totals[n] for n in totals if n in PREFERRED]
+    chosen = max(preferred) if preferred else max(totals.values())
+    return max(0, min(100, round(chosen * 100 / dt_ns)))
 
 def rc6_pct(before, after, dt_ms):
     if dt_ms <= 0 or not after:
@@ -232,17 +282,29 @@ def rc6_pct(before, after, dt_ms):
         best = busy if best is None else max(best, busy)
     return best
 
-t0 = time.monotonic()
-fd0, rc0 = snap_fdinfo(), snap_rc6()
-time.sleep(0.2)
-t1 = time.monotonic()
+now_ns = time.monotonic_ns()
 fd1, rc1 = snap_fdinfo(), snap_rc6()
-dt_ns = (t1 - t0) * 1e9
-dt_ms = (t1 - t0) * 1000
+prev = load_state()
+save_state(now_ns, fd1, rc1)
 
-pct = fdinfo_pct(fd0, fd1, dt_ns)
+pct = None
+if prev is not None:
+    t0, fd0, rc0 = prev
+    dt_ns = now_ns - t0
+    if 400_000_000 <= dt_ns <= 10_000_000_000:
+        pct = fdinfo_pct(fd0, fd1, dt_ns)
+        if pct is None:
+            pct = rc6_pct(rc0, rc1, dt_ns / 1e6)
+
 if pct is None:
-    pct = rc6_pct(rc0, rc1, dt_ms)
+    time.sleep(0.2)
+    t1 = time.monotonic_ns()
+    fd2, rc2 = snap_fdinfo(), snap_rc6()
+    save_state(t1, fd2, rc2)
+    pct = fdinfo_pct(fd1, fd2, t1 - now_ns)
+    if pct is None:
+        pct = rc6_pct(rc1, rc2, (t1 - now_ns) / 1e6)
+
 if pct is None:
     raise SystemExit(0)
 print("gpu %d" % pct)

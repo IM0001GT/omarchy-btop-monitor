@@ -11,8 +11,8 @@
 #   2. Installs optional NVIDIA tools (sudo) if nvidia-smi is missing.
 #      Intel and AMD need no extra packages and no sysctl changes.
 #   3. Removes any older btop-monitor perf_event_paranoid drop-in.
-#   4. Unless --deps is set, installs the plugin and enables it as a bar
-#      widget, rightmost in the right section.
+#   4. Unless --deps is set, installs or updates the plugin, enables it,
+#      and restarts omarchy-shell so the new QML is actually loaded.
 #
 # Run it as your normal user; it calls sudo for the privileged steps.
 
@@ -26,15 +26,17 @@ usage() {
   cat <<'EOF'
 Usage: ./install.sh [--deps] [-h|--help]
 
-Install the btop-monitor Omarchy bar widget and optional GPU tools.
+Install or update the btop-monitor Omarchy bar widget.
 
   --deps        Install optional NVIDIA tools; remove old sysctl drop-ins
   -h, --help    Show this help
 
-Preferred install (git-managed, updates via omarchy plugin update):
+Preferred install:
 
   omarchy plugin add https://github.com/IM0001GT/omarchy-btop-monitor --enable
-  ~/.config/omarchy/plugins/btop-monitor/install.sh --deps
+  ~/.config/omarchy/plugins/btop-monitor/install.sh
+
+A shell restart is required after an update so Quickshell loads the new QML.
 
 Uninstall:
 
@@ -169,11 +171,20 @@ copy_plugin_files() {
   chown -R "$real_user:" "$plugin_dir" 2>/dev/null || true
 }
 
+reload_shell() {
+  echo "Restarting omarchy-shell so the new plugin code is loaded ..."
+  rm -rf "$real_home/.cache/quickshell/qmlcache" 2>/dev/null || true
+  if ! run_as_user omarchy restart shell; then
+    echo "warning: could not restart the shell. Run: omarchy restart shell" >&2
+  fi
+}
+
 if [[ $SCRIPT_DIR == "$plugin_dir" ]]; then
   echo "Already running from the installed plugin directory."
 elif [[ -d $plugin_dir/.git ]]; then
-  echo "Plugin already installed as a git checkout at $plugin_dir"
-  echo "Update later with: omarchy plugin update $PLUGIN_ID"
+  echo "Plugin already installed as a git checkout. Updating ..."
+  run_as_user omarchy plugin update "$PLUGIN_ID" --yes || \
+    echo "warning: omarchy plugin update failed; restarting with the files already on disk." >&2
 elif [[ ! -e $plugin_dir ]]; then
   origin=""
   if git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -223,6 +234,8 @@ if ! run_as_user omarchy plugin enable "$PLUGIN_ID" --after omarchy.power; then
   echo "omarchy.power not found in the layout; appending to the right section instead."
   run_as_user omarchy plugin enable "$PLUGIN_ID" --section right
 fi
+
+reload_shell
 
 echo
 echo "Done. 'btop System Monitor' is now a bar widget at the far right."

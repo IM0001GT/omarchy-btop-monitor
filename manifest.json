@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "btop-monitor",
   "name": "btop System Monitor",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "author": "IM0001GT",
   "description": "btop launcher with a CPU/RAM/GPU/storage hover panel",
   "kinds": [

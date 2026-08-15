@@ -56,8 +56,11 @@ That adds the plugin, places it rightmost in the right section (after `omarchy.p
 If you installed with `omarchy plugin add`:
 
 ```bash
-omarchy plugin update btop-monitor
+omarchy plugin update btop-monitor --yes
+omarchy restart shell
 ```
+
+`omarchy plugin update` only fast-forwards the git checkout. Quickshell can keep the previous QML in memory until the shell restarts, so the second command is required. `./install.sh` does the update and the restart together.
 
 ## Uninstall
 

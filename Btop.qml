@@ -10,23 +10,91 @@ BarWidget {
   readonly property string systemScript:
     Quickshell.env("HOME") + "/.config/omarchy/plugins/" + root.moduleName + "/scripts/system-usage"
 
+  readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
+  readonly property color dim: Qt.darker(root.fg, 1.4)
+  readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+
   property string cpuText: "--"
+  property string cpuName: "CPU"
   property var cores: []
   property string ramUsed: "--"
   property string ramTotal: "--"
   property int ramPct: 0
+  property string ramInfo: ""
   property string gpuText: "n/a"
+  property string gpuName: "GPU"
+  property string gpuKind: "render"
   property var disks: []
+
+  readonly property int cpuPct: parseInt(cpuText, 10) || 0
+  readonly property int gpuPct: gpuText === "n/a" ? -1 : (parseInt(gpuText, 10) || 0)
+
+  // Same shape as omarchy.power: verb-ing lines, swapped on a fade.
+  readonly property var idlePhrases: [
+    "Sipping cycles",
+    "Idling cores",
+    "Loafing threads",
+    "Napping ALUs",
+    "Counting sheep"
+  ]
+  readonly property var steadyPhrases: [
+    "Watching watts",
+    "Herding threads",
+    "Keeping score",
+    "Poking silicon",
+    "Weighing bytes",
+    "Sampling chaos"
+  ]
+  readonly property var busyPhrases: [
+    "Crunching numbers",
+    "Melting silicon",
+    "All cores in",
+    "Thrashing caches",
+    "Cooking the die"
+  ]
+  readonly property var gpuPhrases: [
+    "Drawing frames",
+    "Pushing pixels",
+    "Painting buffers",
+    "Shading triangles",
+    "Filling scanlines"
+  ]
+  readonly property var inferPhrases: [
+    "Crunching tensors",
+    "Feeding the model",
+    "Spinning weights",
+    "Unrolling attention",
+    "Chewing context"
+  ]
+
+  readonly property var activePhrases: {
+    if (gpuPct >= 50 && gpuKind === "infer") return inferPhrases
+    if (gpuPct >= 50) return gpuPhrases
+    if (cpuPct >= 50) return busyPhrases
+    if (cpuPct <= 15 && gpuPct <= 15) return idlePhrases
+    return steadyPhrases
+  }
+
+  property int phraseIndex: 0
+  readonly property string heroStatusText: activePhrases[phraseIndex % activePhrases.length]
+
+  function restOf(line, key) {
+    return String(line).slice(key.length).trim()
+  }
 
   function parse(raw) {
     var lines = String(raw || "").split("\n")
     var cores = []
     var disks = []
     var cpu = "--"
+    var cpuName = root.cpuName
     var ramUsed = "--"
     var ramTotal = "--"
     var ramPct = 0
+    var ramInfo = root.ramInfo
     var gpu = "n/a"
+    var gpuName = root.gpuName
+    var gpuKind = root.gpuKind
 
     for (var i = 0; i < lines.length; i++) {
       var line = String(lines[i]).trim()
@@ -36,6 +104,9 @@ BarWidget {
 
       if (key === "cpu" && parts.length > 1) {
         cpu = parts[1] + "%"
+      } else if (key === "cpu_name") {
+        var n = root.restOf(line, key)
+        if (n) cpuName = n
       } else if (key === "core" && parts.length > 2) {
         var pct = parseFloat(parts[2])
         if (isFinite(pct)) cores.push({ core: parseInt(parts[1], 10), percent: Math.max(0, Math.min(100, Math.round(pct))) })
@@ -43,20 +114,32 @@ BarWidget {
         ramUsed = parts[1]
         ramTotal = parts[2]
         ramPct = Math.max(0, Math.min(100, Math.round(parseFloat(parts[3]) || 0)))
+      } else if (key === "ram_info") {
+        ramInfo = root.restOf(line, key)
       } else if (key === "gpu" && parts.length > 1) {
         gpu = parts[1] === "n/a" ? "n/a" : Math.max(0, Math.min(100, Math.round(parseFloat(parts[1]) || 0))) + "%"
+      } else if (key === "gpu_name") {
+        var gn = root.restOf(line, key)
+        if (gn) gpuName = gn
+      } else if (key === "gpu_kind" && parts.length > 1) {
+        gpuKind = parts[1]
       } else if (key === "disk" && parts.length > 4) {
         var diskPct = Math.max(0, Math.min(100, Math.round(parseFloat(parts[4]) || 0)))
-        disks.push({ mount: parts[1], used: parts[2], total: parts[3], percent: diskPct })
+        var model = parts.length > 5 ? parts.slice(5).join(" ") : ""
+        disks.push({ mount: parts[1], used: parts[2], total: parts[3], percent: diskPct, name: model })
       }
     }
 
     root.cpuText = cpu
+    root.cpuName = cpuName
     root.cores = cores
     root.ramUsed = ramUsed
     root.ramTotal = ramTotal
     root.ramPct = ramPct
+    root.ramInfo = ramInfo
     root.gpuText = gpu
+    root.gpuName = gpuName
+    root.gpuKind = gpuKind
     root.disks = disks
   }
 
@@ -80,51 +163,114 @@ BarWidget {
     target: button
   }
 
+  Timer {
+    id: phraseTimer
+    interval: 2800
+    running: popup.open
+    repeat: true
+    triggeredOnStart: false
+    onTriggered: phraseSwap.restart()
+  }
+
+  SequentialAnimation {
+    id: phraseSwap
+    PropertyAnimation {
+      target: heroStatus
+      property: "opacity"
+      to: 0.0
+      duration: 180
+      easing.type: Easing.OutQuad
+    }
+    ScriptAction {
+      script: {
+        var n = root.activePhrases.length
+        if (n > 0) root.phraseIndex = (root.phraseIndex + 1) % n
+      }
+    }
+    PropertyAnimation {
+      target: heroStatus
+      property: "opacity"
+      to: 1.0
+      duration: 260
+      easing.type: Easing.InQuad
+    }
+  }
+
+  Connections {
+    target: popup
+    function onOpenChanged() {
+      if (!popup.open) {
+        phraseSwap.stop()
+        heroStatus.opacity = 1.0
+      }
+    }
+  }
+
   PopupCard {
     id: popup
     anchorItem: button
     bar: root.bar
     triggerMode: "hover"
     open: buttonHover.hovered || popup.containsMouse
-    contentWidth: popup.fittedContentWidth(Style.space(260))
-    contentHeight: popup.fittedContentHeight(panel.implicitHeight, Style.space(480))
+    contentWidth: popup.fittedContentWidth(Style.space(300))
+    contentHeight: popup.fittedContentHeight(panel.implicitHeight, Style.space(520))
 
     Column {
       id: panel
       width: parent.width
-      spacing: Style.spacing.md
+      spacing: Style.space(14)
 
       Item {
         width: parent.width
-        implicitHeight: Math.max(cpuIcon.implicitHeight, cpuTitle.implicitHeight, cpuOverall.implicitHeight)
+        implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, heroPercent.implicitHeight)
 
         Text {
-          id: cpuIcon
+          id: heroIcon
           text: "󰍛"
-          color: root.bar ? root.bar.foreground : Color.foreground
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.title
+          color: root.fg
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.display
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
         }
 
-        Text {
-          id: cpuTitle
-          text: "CPU"
-          color: root.bar ? root.bar.foreground : Color.foreground
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.title
-          font.bold: true
-          anchors.left: cpuIcon.right
-          anchors.leftMargin: Style.space(8)
+        Column {
+          id: heroLabels
+          anchors.left: heroIcon.right
+          anchors.leftMargin: Style.space(14)
+          anchors.right: heroPercent.left
+          anchors.rightMargin: Style.space(10)
           anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(2)
+
+          Text {
+            text: root.cpuName
+            color: root.fg
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.title
+            font.bold: true
+            elide: Text.ElideRight
+            width: parent.width
+          }
+
+          Text {
+            id: heroStatus
+            text: root.heroStatusText.toUpperCase()
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 1.2
+            elide: Text.ElideRight
+            width: parent.width
+          }
         }
 
         Text {
-          id: cpuOverall
+          id: heroPercent
           text: root.cpuText
-          color: root.bar ? root.bar.foreground : Color.foreground
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          color: root.fg
+          font.family: root.fontFamily
           font.pixelSize: Style.font.title
           font.bold: true
           anchors.right: parent.right
@@ -150,37 +296,25 @@ BarWidget {
 
             Text {
               text: "C" + modelData.core
-              color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.3)
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              color: root.dim
+              font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               font.bold: true
               width: Style.space(20)
               anchors.verticalCenter: parent.verticalCenter
             }
 
-            Item {
+            Meter {
               width: parent.width - Style.space(20) - Style.space(34) - Style.space(12)
-              height: Style.space(4)
+              implicitHeight: Style.space(4)
               anchors.verticalCenter: parent.verticalCenter
-
-              Rectangle {
-                anchors.fill: parent
-                radius: Style.cornerRadius > 0 ? Math.min(Style.cornerRadius, height / 2) : 0
-                color: Util.alpha(root.bar ? root.bar.foreground : Color.foreground, 0.18)
-              }
-
-              Rectangle {
-                width: parent.width * modelData.percent / 100
-                height: parent.height
-                radius: Style.cornerRadius > 0 ? Math.min(Style.cornerRadius, height / 2) : 0
-                color: Util.alpha(Color.accent, 0.9)
-              }
+              percent: modelData.percent
             }
 
             Text {
               text: modelData.percent + "%"
-              color: root.bar ? root.bar.foreground : Color.foreground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              color: root.fg
+              font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               font.bold: true
               width: Style.space(34)
@@ -192,62 +326,44 @@ BarWidget {
       }
 
       PanelSeparator {
-        foreground: root.bar ? root.bar.foreground : Color.foreground
+        foreground: root.fg
       }
 
-      StatRow {
+      SectionBlock {
         icon: "󰓅"
-        label: "RAM"
+        title: "Memory"
         value: root.ramPct + "%"
+        status: root.ramInfo !== ""
+          ? root.ramInfo + " · " + root.ramUsed + " / " + root.ramTotal + " GiB"
+          : root.ramUsed + " / " + root.ramTotal + " GiB"
         percent: root.ramPct
-        caption: root.ramUsed + " / " + root.ramTotal + " GiB"
       }
 
       PanelSeparator {
-        foreground: root.bar ? root.bar.foreground : Color.foreground
+        foreground: root.fg
       }
 
-      StatRow {
+      SectionBlock {
         icon: "󰢮"
-        label: "GPU"
+        title: root.gpuName
         value: root.gpuText
-        percent: root.gpuText === "n/a" ? -1 : parseInt(root.gpuText, 10)
-        caption: root.gpuText === "n/a" ? "GPU stats unavailable" : ""
+        status: root.gpuText === "n/a" ? "GPU stats unavailable" : ""
+        percent: root.gpuText === "n/a" ? -1 : root.gpuPct
       }
 
       PanelSeparator {
-        foreground: root.bar ? root.bar.foreground : Color.foreground
+        foreground: root.fg
       }
 
-      Item {
-        width: parent.width
-        implicitHeight: Math.max(diskIcon.implicitHeight, diskTitle.implicitHeight)
-
-        Text {
-          id: diskIcon
-          text: "󰋊"
-          color: root.bar ? root.bar.foreground : Color.foreground
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.title
-          anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
-        }
-
-        Text {
-          id: diskTitle
-          text: "Storage"
-          color: root.bar ? root.bar.foreground : Color.foreground
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.title
-          font.bold: true
-          anchors.left: diskIcon.right
-          anchors.leftMargin: Style.space(8)
-          anchors.verticalCenter: parent.verticalCenter
-        }
+      SectionBlock {
+        icon: "󰋊"
+        title: "Storage"
+        value: ""
+        status: ""
+        percent: -1
       }
 
       Column {
-        id: disksColumn
         width: parent.width
         spacing: Style.spacing.sm
 
@@ -257,13 +373,109 @@ BarWidget {
           StatRow {
             required property var modelData
 
-            label: modelData.mount
+            label: modelData.name ? modelData.name : modelData.mount
             value: modelData.percent + "%"
             percent: modelData.percent
-            caption: modelData.used + " / " + modelData.total + " GiB"
+            caption: modelData.name
+              ? modelData.mount + " · " + modelData.used + " / " + modelData.total + " GiB"
+              : modelData.used + " / " + modelData.total + " GiB"
           }
         }
       }
+    }
+  }
+
+  component SectionBlock: Column {
+    id: section
+
+    property string icon: ""
+    property string title: ""
+    property string value: ""
+    property string status: ""
+    property int percent: -1
+
+    width: parent.width
+    spacing: Style.space(6)
+
+    Item {
+      width: parent.width
+      implicitHeight: Math.max(secIcon.implicitHeight, secTitle.implicitHeight, secValue.implicitHeight)
+
+      Text {
+        id: secIcon
+        visible: section.icon !== ""
+        text: section.icon
+        color: root.fg
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        anchors.left: parent.left
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        id: secTitle
+        text: section.title
+        color: root.fg
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        font.bold: true
+        elide: Text.ElideRight
+        anchors.left: secIcon.right
+        anchors.leftMargin: Style.space(8)
+        anchors.right: secValue.left
+        anchors.rightMargin: Style.space(8)
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        id: secValue
+        visible: section.value !== ""
+        text: section.value
+        color: root.fg
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        font.bold: true
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+      }
+    }
+
+    Meter {
+      visible: section.percent >= 0
+      width: parent.width
+      implicitHeight: Style.space(6)
+      percent: Math.max(0, section.percent)
+    }
+
+    Text {
+      visible: section.status !== ""
+      width: parent.width
+      text: section.status
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      elide: Text.ElideRight
+    }
+  }
+
+  component Meter: Item {
+    property int percent: 0
+
+    Rectangle {
+      anchors.fill: parent
+      radius: height / 2
+      color: Util.alpha(root.fg, 0.12)
+    }
+
+    Rectangle {
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      height: parent.height
+      radius: height / 2
+      color: Util.alpha(Color.accent, 0.9)
+      width: Math.max(parent.height, parent.width * Math.max(0, Math.min(100, percent)) / 100)
+
+      Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
     }
   }
 
@@ -274,14 +486,10 @@ BarWidget {
     required property string value
     required property int percent
     property string caption: ""
-    property string icon: ""
 
     width: parent.width
 
-    readonly property real headerHeight: Math.max(
-      statIcon.implicitHeight,
-      Math.max(statLabel.implicitHeight, statValue.implicitHeight))
-
+    readonly property real headerHeight: Math.max(statLabel.implicitHeight, statValue.implicitHeight)
     readonly property real barHeight: Style.space(5)
     readonly property real gap: Style.space(3)
     readonly property real barBlock: percent >= 0 ? gap + barHeight : 0
@@ -296,33 +504,24 @@ BarWidget {
       height: statRow.headerHeight
 
       Text {
-        id: statIcon
-        visible: statRow.icon !== ""
-        text: statRow.icon
-        color: root.bar ? root.bar.foreground : Color.foreground
-        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-        font.pixelSize: Style.font.caption
-        anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
-      }
-
-      Text {
         id: statLabel
         text: statRow.label
-        color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.3)
-        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        color: root.dim
+        font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         font.bold: true
-        anchors.left: statIcon.right
-        anchors.leftMargin: Style.space(8)
+        elide: Text.ElideRight
+        anchors.left: parent.left
+        anchors.right: statValue.left
+        anchors.rightMargin: Style.space(8)
         anchors.verticalCenter: parent.verticalCenter
       }
 
       Text {
         id: statValue
         text: statRow.value
-        color: root.bar ? root.bar.foreground : Color.foreground
-        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        color: root.fg
+        font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         font.bold: true
         anchors.right: parent.right
@@ -330,24 +529,12 @@ BarWidget {
       }
     }
 
-    Rectangle {
-      id: statTrack
+    Meter {
       visible: statRow.percent >= 0
       y: headerRow.height + statRow.gap
       width: parent.width
-      height: statRow.barHeight
-      radius: Style.cornerRadius > 0 ? Math.min(Style.cornerRadius, height / 2) : 0
-      color: Util.alpha(root.bar ? root.bar.foreground : Color.foreground, 0.18)
-    }
-
-    Rectangle {
-      id: statFill
-      visible: statRow.percent >= 0
-      y: headerRow.height + statRow.gap
-      width: parent.width * statRow.percent / 100
-      height: statRow.barHeight
-      radius: Style.cornerRadius > 0 ? Math.min(Style.cornerRadius, height / 2) : 0
-      color: Util.alpha(Color.accent, 0.9)
+      implicitHeight: statRow.barHeight
+      percent: statRow.percent
     }
 
     Text {
@@ -356,9 +543,10 @@ BarWidget {
       y: headerRow.height + statRow.barBlock + statRow.gap
       width: parent.width
       text: statRow.caption
-      color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.45)
-      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+      color: root.dim
+      font.family: root.fontFamily
       font.pixelSize: Style.font.caption
+      elide: Text.ElideRight
     }
   }
 

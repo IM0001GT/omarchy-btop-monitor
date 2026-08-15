@@ -4,9 +4,13 @@
 # Output format (one token per line, whitespace separated):
 #   cpu <overall-percent>
 #   core <index> <percent>        (one line per logical core)
+#   cpu_name <rest of line>
 #   ram <used-gib> <total-gib> <percent>
+#   ram_info <type and speed, rest of line>
 #   gpu <percent> | n/a
-#   disk <mount> <used-gib> <total-gib> <percent>   (one line per device)
+#   gpu_name <rest of line>
+#   gpu_kind render | infer
+#   disk <mount> <used-gib> <total-gib> <percent> [model...]
 #
 # GPU source is the first tool that actually returns a sample:
 #   NVIDIA -> nvidia-smi (nvidia-utils; skipped if the driver is not talking)
@@ -344,16 +348,268 @@ gpu_report() {
 
 gpu_report
 
+# ---- Hardware labels (cached; names do not change every tick) --------
+
+if command -v python3 >/dev/null 2>&1; then
+  python3 - <<'PY'
+import glob, os, re, subprocess
+
+def cache_path():
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime:
+        return os.path.join(runtime, "btop-monitor-hw")
+    cache = os.path.join(os.path.expanduser("~"), ".cache", "btop-monitor")
+    try:
+        os.makedirs(cache, mode=0o700, exist_ok=True)
+    except OSError:
+        return None
+    return os.path.join(cache, "hw")
+
+def load_cache():
+    path = cache_path()
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        if "cpu_name " in text and "gpu_name GPU" not in text:
+            return text
+    except OSError:
+        return None
+    return None
+
+def save_cache(text):
+    path = cache_path()
+    if not path:
+        return
+    tmp = path + ".tmp"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+def clean_spaces(s):
+    return " ".join((s or "").split())
+
+def cpu_name():
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("model name"):
+                    name = line.split(":", 1)[1].strip()
+                    name = re.sub(r"\(R\)|\(TM\)|\(tm\)|\(r\)", "", name)
+                    name = re.sub(r"\s*CPU\s*@\s*[\d.]+\s*GHz", "", name, flags=re.I)
+                    name = re.sub(r"\d+-Core Processor.*", "", name)
+                    name = name.replace("Processor", "").strip(" ,")
+                    return clean_spaces(name) or "CPU"
+    except OSError:
+        pass
+    return "CPU"
+
+def clean_gpu_name(raw):
+    name = clean_spaces(raw)
+    name = re.sub(r"\s*\([^)]*rev[^)]*\)", "", name, flags=re.I)
+    name = re.sub(r"\s*\((Ice Lake|Comet Lake|Tiger Lake|Alder Lake|Raptor Lake|Meteor Lake|Arrow Lake|Coffee Lake|Haswell|Skylake|Kaby Lake|Whiskey Lake|Amber Lake)[^)]*\)", "", name, flags=re.I)
+    name = re.sub(r"^Advanced Micro Devices, Inc\.?\s*", "", name, flags=re.I)
+    name = re.sub(r"^(AMD/ATI|ATI)\s*", "AMD ", name, flags=re.I)
+    name = re.sub(r"^Intel Corporation\s*", "Intel ", name, flags=re.I)
+    name = re.sub(r"^NVIDIA Corporation\s*", "NVIDIA ", name, flags=re.I)
+    name = name.replace(" Corporation", "")
+    return clean_spaces(name) or "GPU"
+
+def gpu_name():
+    if os.path.exists("/proc/driver/nvidia/version"):
+        try:
+            out = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=0.5,
+            )
+            line = (out.stdout or "").strip().splitlines()
+            if out.returncode == 0 and line:
+                return clean_gpu_name(line[0])
+        except Exception:
+            pass
+    try:
+        out = subprocess.run(["lspci", "-mm"], capture_output=True, text=True, timeout=1)
+    except Exception:
+        return "GPU"
+    for line in out.stdout.splitlines():
+        if "VGA compatible controller" not in line and '"3D controller"' not in line and "Display controller" not in line:
+            continue
+        parts = re.findall(r'"([^"]*)"', line)
+        if len(parts) >= 3:
+            vendor, device = parts[1], parts[2]
+            return clean_gpu_name(vendor + " " + device)
+        if ": " in line:
+            return clean_gpu_name(line.split(": ", 1)[1])
+    return "GPU"
+
+def ram_from_dmidecode(text):
+    types, speeds, parts = [], [], []
+    block = {}
+    def flush():
+        if not block:
+            return
+        size = block.get("Size", "")
+        if not size or size == "No Module Installed":
+            return
+        t = block.get("Type", "")
+        if t and t not in ("Unknown", "Other"):
+            types.append(t)
+        speed = block.get("Configured Memory Speed") or block.get("Configured Clock Speed") or block.get("Speed")
+        if speed:
+            m = re.search(r"(\d+)\s*MT/s", speed)
+            if m:
+                speeds.append(m.group(1))
+        part = block.get("Part Number", "")
+        if part and part not in ("Unknown", "Not Specified", "NO DIMM"):
+            parts.append(part.strip())
+
+    for line in text.splitlines():
+        if not line.strip():
+            flush()
+            block = {}
+            continue
+        if ":" in line:
+            k, v = line.split(":", 1)
+            block[k.strip()] = v.strip()
+    flush()
+    return types, speeds, parts
+
+def ram_from_inxi(text):
+    types = re.findall(r"type:\s*([A-Za-z0-9]+)", text)
+    types = [t for t in types if t.lower() not in ("none", "unknown")]
+    actuals = re.findall(r"actual:\s*([\d.]+)\s*MT/s", text)
+    specs = re.findall(r"spec:\s*([\d.]+)\s*MT/s", text)
+    return types, actuals or specs, []
+
+def ram_info():
+    texts = []
+    for cmd in (
+        ["dmidecode", "-t", "memory"],
+        ["/usr/sbin/dmidecode", "-t", "memory"],
+    ):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=1)
+            if out.returncode == 0 and "Memory Device" in (out.stdout or ""):
+                texts.append(("dmi", out.stdout))
+                break
+        except Exception:
+            pass
+    if not texts:
+        for cmd in (["inxi", "-mxxxx", "-c0"],):
+            try:
+                out = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+                if out.returncode == 0 and "Memory" in (out.stdout or ""):
+                    texts.append(("inxi", out.stdout))
+            except Exception:
+                pass
+    types, speeds, parts = [], [], []
+    for kind, text in texts:
+        if kind == "dmi":
+            types, speeds, parts = ram_from_dmidecode(text)
+        else:
+            types, speeds, parts = ram_from_inxi(text)
+        if types or speeds:
+            break
+    bits = []
+    if types:
+        bits.append(sorted(set(types), key=types.index)[0])
+    if speeds:
+        bits.append("%s MT/s" % sorted(set(speeds), key=speeds.index)[0])
+    if parts and len(set(parts)) == 1:
+        bits.append(parts[0])
+    return " ".join(bits)
+
+cached = load_cache()
+if cached:
+    print(cached, end="" if cached.endswith("\n") else "\n")
+else:
+    lines = ["cpu_name %s" % cpu_name(), "gpu_name %s" % gpu_name()]
+    info = ram_info()
+    if info:
+        lines.append("ram_info %s" % info)
+    text = "\n".join(lines) + "\n"
+    save_cache(text)
+    print(text, end="")
+PY
+fi
+
+# Cheap process scan so high GPU can pick "drawing frames" vs "crunching tensors".
+if command -v python3 >/dev/null 2>&1; then
+  python3 - <<'PY'
+import os
+
+COMM_HITS = {
+    "ollama", "llama-server", "llama-cli", "llama-bench", "llama",
+    "koboldcpp", "vllm", "sglang", "tabbyapi", "localai",
+    "gpt4all", "lmstudio", "mlx", "whisper", "comfyui",
+}
+CMD_NEEDLES = (
+    "ollama", "llama.cpp", "llama-server", "vllm", "sglang",
+    "comfyui", "comfy ui", "stable-diffusion-webui", "invokeai",
+    "automatic1111", "fooocus", "koboldcpp", "exllama",
+    "lmstudio", "lm-studio", "gpt4all", "localai",
+    "faster-whisper", "whisper.cpp", "mlx_lm", "mlx-lm",
+    "text-generation-webui", "oobabooga", "aphrodite",
+    "tensorrt-llm", "tritonserver", "diffusers",
+)
+
+def is_infer():
+    try:
+        pids = os.listdir("/proc")
+    except OSError:
+        return False
+    for pid in pids:
+        if not pid.isdigit():
+            continue
+        try:
+            with open("/proc/%s/comm" % pid, "r", errors="ignore") as fh:
+                comm = fh.read().strip().lower()
+        except OSError:
+            continue
+        if comm in COMM_HITS:
+            return True
+        if comm not in ("python", "python3", "python3.12", "python3.13",
+                        "node", "nodejs", "uv", "uvicorn", "gunicorn"):
+            continue
+        try:
+            with open("/proc/%s/cmdline" % pid, "r", errors="ignore") as fh:
+                cmd = fh.read().replace("\x00", " ").lower()
+        except OSError:
+            continue
+        if any(n in cmd for n in CMD_NEEDLES):
+            return True
+    return False
+
+print("gpu_kind %s" % ("infer" if is_infer() else "render"))
+PY
+fi
+
 # ---- Storage ---------------------------------------------------------
 
+disk_model() {
+  local dev=$1 model
+  model=$(lsblk -nso MODEL "$dev" 2>/dev/null | awk 'NF { m=$0 } END { gsub(/^[ \t]+|[ \t]+$/, "", m); print m }')
+  printf '%s' "$model"
+}
+
 df -P -x tmpfs -x devtmpfs -x squashfs -x overlay -x iso9660 2>/dev/null |
-  awk '
-    NR > 1 && $1 ~ /^\/dev\// {
-      if (seen[$1]) next
-      seen[$1] = 1
-      used_g = $3 / 1048576
-      total_g = $2 / 1048576
-      pct = ($2 > 0) ? $3 / $2 * 100 : 0
-      printf "disk %s %.1f %.1f %.0f\n", $6, used_g, total_g, pct
-    }
-  '
+  awk 'NR > 1 && $1 ~ /^\/dev\// && !seen[$1]++ { print $1, $2, $3, $6 }' |
+  while read -r src blocks used mnt; do
+    used_g=$(awk -v n="$used" 'BEGIN { printf "%.1f", n / 1048576 }')
+    total_g=$(awk -v n="$blocks" 'BEGIN { printf "%.1f", n / 1048576 }')
+    pct=$(awk -v u="$used" -v t="$blocks" 'BEGIN { printf "%.0f", (t > 0) ? u / t * 100 : 0 }')
+    model=$(disk_model "$src")
+    if [[ -n $model ]]; then
+      printf 'disk %s %s %s %s %s\n' "$mnt" "$used_g" "$total_g" "$pct" "$model"
+    else
+      printf 'disk %s %s %s %s\n' "$mnt" "$used_g" "$total_g" "$pct"
+    fi
+  done

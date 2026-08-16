@@ -101,25 +101,91 @@ BarWidget {
     "Crowding the disk"
   ]
 
+  // Load bands, with hysteresis. The pool used to be derived straight from the
+  // raw percentages, so a CPU parked on a threshold flipped it on every 2s
+  // sample. Entry and exit sit apart, so a steady load holds one band.
+  property bool bandIdle: true
+  property bool bandCpuBusy: false
+  property bool bandGpuBusy: false
+
+  function updateBands() {
+    var quiet = cpuPct <= 15 && gpuPct <= 15
+    if (bandIdle) { if (cpuPct > 25 || gpuPct > 25) bandIdle = false }
+    else if (quiet) bandIdle = true
+
+    if (bandCpuBusy) { if (cpuPct < 40) bandCpuBusy = false }
+    else if (cpuPct >= 50) bandCpuBusy = true
+
+    if (bandGpuBusy) { if (gpuPct < 40) bandGpuBusy = false }
+    else if (gpuPct >= 50) bandGpuBusy = true
+  }
+
   readonly property var activePhrases: {
     var pool = []
-    var i
     function add(list) {
-      for (i = 0; i < list.length; i++) pool.push(list[i])
+      for (var i = 0; i < list.length; i++) pool.push(list[i])
     }
     // Ambient lines always stay in the mix so one device cannot own the rotation.
-    if (cpuPct <= 15 && gpuPct <= 15) add(idlePhrases)
+    if (bandIdle) add(idlePhrases)
     else add(steadyPhrases)
-    if (cpuPct >= 50) add(busyPhrases)
-    if (gpuPct >= 50 && gpuKind === "infer") add(inferPhrases)
-    else if (gpuPct >= 50) add(gpuPhrases)
-    if (ramActive) add(ramPhrases)
-    if (diskActive) add(storagePhrases)
+    if (bandCpuBusy) add(busyPhrases)
+    if (bandGpuBusy && gpuKind === "infer") add(inferPhrases)
+    else if (bandGpuBusy) add(gpuPhrases)
+    // ram_active and disk_io are single-sample deltas that flicker on and off
+    // between polls. The hold timers keep a burst in the pool for a few samples
+    // instead of adding and dropping five phrases every 2s.
+    if (ramHold.running) add(ramPhrases)
+    if (diskHold.running) add(storagePhrases)
     return pool
   }
 
-  property int phraseIndex: 0
-  readonly property string heroStatusText: activePhrases[phraseIndex % activePhrases.length]
+  // The visible phrase is stored, never derived. A metric sample can change
+  // which phrases are eligible next; it can no longer rewrite the line that is
+  // already on screen, so every change goes through the fade exactly once.
+  property string heroStatusText: ""
+  property var phraseDeck: []
+  property string phrasePoolKey: ""
+
+  function shuffled(list) {
+    var out = list.slice()
+    for (var i = out.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1))
+      var swap = out[i]
+      out[i] = out[j]
+      out[j] = swap
+    }
+    return out
+  }
+
+  // Draw from a shuffled deck rather than stepping an index modulo the pool
+  // length: the pool changes size while the panel is open, and a modular index
+  // silently jumps or repeats whenever it does. A deck empties before it
+  // refills, so nothing repeats inside a pass.
+  function refillDeck() {
+    var pool = root.activePhrases
+    root.phrasePoolKey = pool.join("|")
+    var deck = root.shuffled(pool)
+    if (deck.length > 1 && deck[0] === root.heroStatusText) deck.push(deck.shift())
+    root.phraseDeck = deck
+  }
+
+  function drawPhrase() {
+    if (root.phraseDeck.length === 0) root.refillDeck()
+    if (root.phraseDeck.length === 0) return root.heroStatusText
+    var deck = root.phraseDeck.slice()
+    var next = deck.shift()
+    root.phraseDeck = deck
+    return next
+  }
+
+  // Drop the deck when the pool really changed, so stale phrases (a busy line
+  // on a now-idle CPU) cannot still be drawn. Identity alone is not enough:
+  // the binding re-evaluates on every sample and hands back a fresh array.
+  onActivePhrasesChanged: {
+    if (root.activePhrases.join("|") !== root.phrasePoolKey) root.phraseDeck = []
+  }
+
+  Component.onCompleted: root.heroStatusText = root.drawPhrase()
 
   function restOf(line, key) {
     return String(line).slice(key.length).trim()
@@ -192,6 +258,10 @@ BarWidget {
     root.ramActive = ramActive
     root.diskActive = diskActive
     root.disks = disks
+
+    if (ramActive) ramHold.restart()
+    if (diskActive) diskHold.restart()
+    root.updateBands()
   }
 
   function launch() {
@@ -225,13 +295,47 @@ BarWidget {
     target: button
   }
 
+  Timer { id: ramHold; interval: 12000; repeat: false }
+  Timer { id: diskHold; interval: 12000; repeat: false }
+
+  // Rotation runs off this rather than off `popup.open` directly. The pointer
+  // crosses a gap between the chip and the card, so `popup.open` dips false for
+  // a frame in normal use; following it verbatim reset the interval and aborted
+  // the fade mid-swap, which read as a skipped or hurried phrase.
+  property bool rotationActive: false
+
+  function startRotation() {
+    rotationStop.stop()
+    if (root.rotationActive) return
+    root.phraseDeck = []
+    root.phrasePoolKey = ""
+    root.heroStatusText = root.drawPhrase()
+    heroStatus.opacity = 1.0
+    root.rotationActive = true
+  }
+
+  function stopRotation() {
+    root.rotationActive = false
+    phraseSwap.stop()
+    heroStatus.opacity = 1.0
+  }
+
+  Timer {
+    id: rotationStop
+    interval: 250
+    repeat: false
+    onTriggered: root.stopRotation()
+  }
+
   Timer {
     id: phraseTimer
     interval: 2800
-    running: popup.open
+    running: root.rotationActive
     repeat: true
     triggeredOnStart: false
-    onTriggered: phraseSwap.restart()
+    // Never restart a swap that is still playing. The fade owns the phrase
+    // between its two halves, and restarting there dropped the commit.
+    onTriggered: if (!phraseSwap.running) phraseSwap.start()
   }
 
   SequentialAnimation {
@@ -244,10 +348,7 @@ BarWidget {
       easing.type: Easing.OutQuad
     }
     ScriptAction {
-      script: {
-        var n = root.activePhrases.length
-        if (n > 0) root.phraseIndex = (root.phraseIndex + 1) % n
-      }
+      script: root.heroStatusText = root.drawPhrase()
     }
     PropertyAnimation {
       target: heroStatus
@@ -261,10 +362,8 @@ BarWidget {
   Connections {
     target: popup
     function onOpenChanged() {
-      if (!popup.open) {
-        phraseSwap.stop()
-        heroStatus.opacity = 1.0
-      }
+      if (popup.open) root.startRotation()
+      else rotationStop.restart()
     }
   }
 

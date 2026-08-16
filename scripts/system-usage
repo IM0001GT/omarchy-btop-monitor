@@ -375,9 +375,10 @@ def load_cache():
             text = fh.read()
         if "cpu_name " not in text or "gpu_name GPU" in text:
             return None
-        # Older builds turned inxi "type: N/A" into ram_info N,
-        # or labeled BC-250 memory in Gbps instead of MT/s.
-        if re.search(r"(?m)^ram_info (N|GDDR6 14 Gbps)$", text):
+        # Older builds turned empty-slot inxi text ("type: N/A",
+        # "type: no module installed") into ram_info N / no, or labeled
+        # BC-250 memory in Gbps instead of MT/s.
+        if re.search(r"(?m)^ram_info (N|no|none|not|GDDR6 14 Gbps)\b", text, re.I):
             return None
         return text
     except OSError:
@@ -456,7 +457,8 @@ def gpu_name():
     return "GPU"
 
 JUNK_RAM_TYPES = {
-    "unknown", "other", "none", "n/a", "n", "na", "ram", "dimm",
+    "unknown", "other", "none", "no", "not", "empty", "uninstalled",
+    "n/a", "n", "na", "ram", "dimm",
 }
 
 def read_sysfs(path):
@@ -514,11 +516,18 @@ def ram_from_dmidecode(text):
     return types, speeds, parts
 
 def ram_from_inxi(text):
-    types = clean_ram_types(re.findall(r"type:\s*([A-Za-z0-9/+-]+)", text))
-    actuals = re.findall(r"actual:\s*([\d.]+)\s*MT/s", text)
-    specs = re.findall(r"spec:\s*([\d.]+)\s*MT/s", text)
-    speeds = re.findall(r"speed:\s*([\d.]+)\s*MT/s", text)
-    return types, actuals or specs or speeds, []
+    # inxi lists empty slots as "type: no module installed". A global
+    # type: scrape would take "no" from those lines and hide DDR5/DDR4.
+    types, speeds = [], []
+    for chunk in re.split(r"\s*Device-\d+:", text)[1:]:
+        if re.search(r"\bno module installed\b|\bnot installed\b|\bno dimm\b", chunk, re.I):
+            continue
+        types.extend(clean_ram_types(re.findall(r"\btype:\s*([A-Za-z0-9/+-]+)", chunk)))
+        actuals = re.findall(r"\bactual:\s*([\d.]+)\s*MT/s", chunk, re.I)
+        specs = re.findall(r"\bspec:\s*([\d.]+)\s*MT/s", chunk, re.I)
+        raw = re.findall(r"\bspeed:\s*([\d.]+)\s*MT/s", chunk, re.I)
+        speeds.extend(actuals or specs or raw)
+    return types, speeds, []
 
 def ram_info():
     # Soldered Cyan Skillfish memory has no SPD. DMI Type is N/A; one slot
@@ -556,7 +565,9 @@ def ram_info():
             break
     bits = []
     if types:
-        bits.append(sorted(set(types), key=types.index)[0])
+        ranked = [t for t in types if re.match(r"(LP)?DDR|GDDR|HBM", t, re.I)]
+        pool = ranked or types
+        bits.append(sorted(set(pool), key=pool.index)[0])
     if speeds:
         bits.append("%s MT/s" % sorted(set(speeds), key=speeds.index)[0])
     if parts and len(set(parts)) == 1:

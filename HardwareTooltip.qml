@@ -30,6 +30,24 @@ BarWidget {
 
   readonly property int cpuPct: parseInt(cpuText, 10) || 0
   readonly property int gpuPct: gpuText === "n/a" ? -1 : (parseInt(gpuText, 10) || 0)
+  readonly property int coreCount: cores.length
+  readonly property int coreColumns: {
+    var n = coreCount
+    if (n <= 1) return 1
+    if (n <= 16) return 2
+    return 4
+  }
+  readonly property int panelWidth: Style.space(coreColumns >= 4 ? 540 : 380)
+  readonly property int coreLabelWidth: Style.space(coreCount >= 100 ? 32 : (coreCount >= 10 ? 26 : 20))
+  readonly property int coreValueWidth: Style.space(34)
+  readonly property real coresBudget: {
+    var avail = popup.availableCardHeight
+    var inset = popup.verticalContentInset
+    var gap = Style.space(14)
+    var reserved = (heroBlock.implicitHeight || 0) + (tail.implicitHeight || 0) + gap * 2 + inset
+    var budget = (avail > 0 ? avail : Style.space(720)) - reserved
+    return Math.max(Style.space(72), budget)
+  }
 
   // Status lines rotate with a fade, like the Power panel.
   readonly property var idlePhrases: [
@@ -256,8 +274,8 @@ BarWidget {
     bar: root.bar
     triggerMode: "hover"
     open: buttonHover.hovered || popup.containsMouse
-    contentWidth: popup.fittedContentWidth(Style.space(380))
-    contentHeight: popup.fittedContentHeight(panel.implicitHeight, Style.space(520))
+    contentWidth: popup.fittedContentWidth(root.panelWidth)
+    contentHeight: popup.fittedContentHeight(panel.implicitHeight)
 
     Column {
       id: panel
@@ -265,6 +283,7 @@ BarWidget {
       spacing: Style.space(14)
 
       Item {
+        id: heroBlock
         width: parent.width
         implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, heroPercent.implicitHeight)
 
@@ -335,107 +354,130 @@ BarWidget {
         }
       }
 
-      Grid {
-        id: coresGrid
+      Flickable {
+        id: coresFlick
+        visible: root.coreCount > 0
         width: parent.width
-        columns: 2
-        columnSpacing: Style.spacing.md
-        rowSpacing: Style.spacing.sm
+        height: root.coreCount > 0 ? Math.min(coresGrid.implicitHeight, root.coresBudget) : 0
+        implicitHeight: height
+        contentWidth: width
+        contentHeight: coresGrid.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+        interactive: contentHeight > height + 1
 
-        Repeater {
-          model: root.cores
+        Grid {
+          id: coresGrid
+          width: coresFlick.width
+          columns: root.coreColumns
+          columnSpacing: Style.spacing.md
+          rowSpacing: Style.spacing.sm
 
-          Row {
-            required property var modelData
+          Repeater {
+            model: root.cores
 
-            width: (coresGrid.width - coresGrid.columnSpacing) / 2
-            spacing: Style.space(6)
+            Row {
+              required property var modelData
 
-            Text {
-              text: "C" + modelData.core
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              width: Style.space(20)
-              anchors.verticalCenter: parent.verticalCenter
-            }
+              width: {
+                var cols = Math.max(1, coresGrid.columns)
+                return (coresGrid.width - coresGrid.columnSpacing * (cols - 1)) / cols
+              }
+              spacing: Style.space(6)
 
-            Meter {
-              width: parent.width - Style.space(20) - Style.space(34) - Style.space(12)
-              implicitHeight: Style.space(4)
-              anchors.verticalCenter: parent.verticalCenter
-              percent: modelData.percent
-            }
+              Text {
+                text: "C" + modelData.core
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                width: root.coreLabelWidth
+                anchors.verticalCenter: parent.verticalCenter
+              }
 
-            Text {
-              text: modelData.percent + "%"
-              color: root.fg
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              width: Style.space(34)
-              horizontalAlignment: Text.AlignRight
-              anchors.verticalCenter: parent.verticalCenter
+              Meter {
+                width: Math.max(Style.space(16), parent.width - root.coreLabelWidth - root.coreValueWidth - Style.space(12))
+                implicitHeight: Style.space(4)
+                anchors.verticalCenter: parent.verticalCenter
+                percent: modelData.percent
+              }
+
+              Text {
+                text: modelData.percent + "%"
+                color: root.fg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                width: root.coreValueWidth
+                horizontalAlignment: Text.AlignRight
+                anchors.verticalCenter: parent.verticalCenter
+              }
             }
           }
         }
       }
 
-      PanelSeparator {
-        foreground: root.fg
-      }
-
-      SectionBlock {
-        icon: "󰓅"
-        title: "Memory"
-        value: root.ramPct + "%"
-        status: root.ramInfo !== ""
-          ? root.ramInfo + " · " + root.ramUsed + " / " + root.ramTotal + " GiB"
-          : root.ramUsed + " / " + root.ramTotal + " GiB"
-        percent: root.ramPct
-      }
-
-      PanelSeparator {
-        foreground: root.fg
-      }
-
-      SectionBlock {
-        icon: "󰢮"
-        title: "GPU"
-        value: root.gpuText
-        status: root.gpuText === "n/a" ? "GPU stats unavailable" : root.gpuName
-        percent: root.gpuText === "n/a" ? -1 : root.gpuPct
-      }
-
-      PanelSeparator {
-        foreground: root.fg
-      }
-
-      SectionBlock {
-        icon: "󰋊"
-        title: "Storage"
-        value: ""
-        status: ""
-        percent: -1
-      }
-
       Column {
+        id: tail
         width: parent.width
-        spacing: Style.spacing.sm
+        spacing: Style.space(14)
 
-        Repeater {
-          model: root.disks
+        PanelSeparator {
+          foreground: root.fg
+        }
 
-          StatRow {
-            required property var modelData
+        SectionBlock {
+          icon: "󰓅"
+          title: "Memory"
+          value: root.ramPct + "%"
+          status: root.ramInfo !== ""
+            ? root.ramInfo + " · " + root.ramUsed + " / " + root.ramTotal + " GiB"
+            : root.ramUsed + " / " + root.ramTotal + " GiB"
+          percent: root.ramPct
+        }
 
-            label: modelData.name ? modelData.name : modelData.mount
-            value: modelData.percent + "%"
-            percent: modelData.percent
-            caption: modelData.name
-              ? modelData.mount + " · " + modelData.used + " / " + modelData.total + " GiB"
-              : modelData.used + " / " + modelData.total + " GiB"
+        PanelSeparator {
+          foreground: root.fg
+        }
+
+        SectionBlock {
+          icon: "󰢮"
+          title: "GPU"
+          value: root.gpuText
+          status: root.gpuText === "n/a" ? "GPU stats unavailable" : root.gpuName
+          percent: root.gpuText === "n/a" ? -1 : root.gpuPct
+        }
+
+        PanelSeparator {
+          foreground: root.fg
+        }
+
+        SectionBlock {
+          icon: "󰋊"
+          title: "Storage"
+          value: ""
+          status: ""
+          percent: -1
+        }
+
+        Column {
+          width: parent.width
+          spacing: Style.spacing.sm
+
+          Repeater {
+            model: root.disks
+
+            StatRow {
+              required property var modelData
+
+              label: modelData.name ? modelData.name : modelData.mount
+              value: modelData.percent + "%"
+              percent: modelData.percent
+              caption: modelData.name
+                ? modelData.mount + " · " + modelData.used + " / " + modelData.total + " GiB"
+                : modelData.used + " / " + modelData.total + " GiB"
+            }
           }
         }
       }

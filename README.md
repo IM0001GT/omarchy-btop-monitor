@@ -79,6 +79,8 @@ cd omarchy-hw-tooltip
 - **Hover** the chip — panel with CPU, memory, GPU, and storage
 - **Click** — launch or focus `btop`
 
+The panel sizes itself to the hardware in the machine: more CPU threads add columns and height, extra disks grow the storage block, and the card still stops at the screen edge. On a 16-core / 32-thread desktop the thread grid uses four columns so Memory, GPU, and Storage stay on screen.
+
 Move it with `omarchy bar move im0001gt.hw-tooltip`.
 
 ## Update

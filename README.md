@@ -5,11 +5,11 @@ An Omarchy bar widget that names the silicon in the machine, then stays out of t
 Click the chip for a Power-style panel: CPU model and per-core bars, RAM type and speed, GPU name and load, disk model and fill. It follows the active Omarchy theme. Right-click opens `btop` if you want the full TUI.
 
 <p align="center">
-  <img src="preview.gif" alt="Hardware Tooltip opening on one Omarchy theme, then following a theme change with live CPU and GPU bars" width="360">
+  <img src="preview.gif" alt="Left-click opens the Hardware Tooltip panel; click again to close" width="360">
 </p>
 
 <p align="center">
-  <img src="preview.png" alt="Hardware Tooltip on a teal Omarchy theme" width="240">
+  <img src="preview.png" alt="Hardware Tooltip click panel" width="240">
   <img src="docs/theme-night.png" alt="Hardware Tooltip after switching to a dark pink theme" width="240">
 </p>
 

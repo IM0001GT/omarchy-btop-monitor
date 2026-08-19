@@ -27,6 +27,7 @@ BarWidget {
   property bool ramActive: false
   property bool diskActive: false
   property var disks: []
+  property bool popupOpen: false
 
   readonly property int cpuPct: parseInt(cpuText, 10) || 0
   readonly property int gpuPct: gpuText === "n/a" ? -1 : (parseInt(gpuText, 10) || 0)
@@ -268,6 +269,10 @@ BarWidget {
     if (root.bar) root.bar.run("omarchy-launch-or-focus-tui btop")
   }
 
+  function close() {
+    root.popupOpen = false
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -287,12 +292,14 @@ BarWidget {
         verticalAlignment: Text.AlignVCenter
       }
     }
-    onPressed: function(b) { root.launch() }
-  }
-
-  HoverHandler {
-    id: buttonHover
-    target: button
+    onPressed: function(b) {
+      if (b === Qt.RightButton) {
+        root.launch()
+        root.close()
+      } else {
+        root.popupOpen = !root.popupOpen
+      }
+    }
   }
 
   Timer { id: ramHold; interval: 12000; repeat: false }
@@ -371,8 +378,9 @@ BarWidget {
     id: popup
     anchorItem: button
     bar: root.bar
-    triggerMode: "hover"
-    open: buttonHover.hovered || popup.containsMouse
+    owner: root
+    triggerMode: "click"
+    open: root.popupOpen
     contentWidth: popup.fittedContentWidth(root.panelWidth)
     contentHeight: popup.fittedContentHeight(panel.implicitHeight)
 

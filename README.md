@@ -2,7 +2,7 @@
 
 An Omarchy bar widget that names the silicon in the machine, then stays out of the way.
 
-Hover the chip for a Power-style panel: CPU model and per-core bars, RAM type and speed, GPU name and load, disk model and fill. It follows the active Omarchy theme. Click opens `btop` if you want the full TUI.
+Click the chip for a Power-style panel: CPU model and per-core bars, RAM type and speed, GPU name and load, disk model and fill. It follows the active Omarchy theme. Right-click opens `btop` if you want the full TUI.
 
 <p align="center">
   <img src="preview.gif" alt="Hardware Tooltip opening on one Omarchy theme, then following a theme change with live CPU and GPU bars" width="360">
@@ -13,7 +13,7 @@ Hover the chip for a Power-style panel: CPU model and per-core bars, RAM type an
   <img src="docs/theme-night.png" alt="Hardware Tooltip after switching to a dark pink theme" width="240">
 </p>
 
-| Hover | Click |
+| Left click | Right click |
 | --- | --- |
 | CPU name, per-core bars, RAM type/speed, GPU name, storage model and mounts | Launch or focus `btop` |
 
@@ -26,7 +26,7 @@ Omarchy Quattro's bar no longer ships a glance for *what this computer is*. Othe
 - **btop Activity** — a btop companion: launch, window mode, process sort, compact meters
 - **System Stats / Vitals / Activity Monitor** — full monitors with tabs, graphs, or process control
 
-Hardware Tooltip is the other thing: a themed hover you can read in one look, with hardware identity on the labels, not just percentages. It is not a btop frontend.
+Hardware Tooltip is the other thing: a themed click panel you can read in one look, with hardware identity on the labels, not just percentages. It is not a btop frontend.
 
 ## ASRock BC-250
 
@@ -76,8 +76,9 @@ cd omarchy-hw-tooltip
 
 ## Use
 
-- **Hover** the chip — panel with CPU, memory, GPU, and storage
-- **Click** — launch or focus `btop`
+- **Left click** the chip — panel with CPU, memory, GPU, and storage
+- **Right click** — launch or focus `btop`
+- Click the chip again, or anywhere outside, to close
 
 The panel sizes itself to the hardware in the machine: more CPU threads add columns and height, extra disks grow the storage block, and the card still stops at the screen edge. On a 16-core / 32-thread desktop the thread grid uses four columns so Memory, GPU, and Storage stay on screen.
 
@@ -129,7 +130,7 @@ Hybrid laptops use the first source that actually returns a reading.
 
 ```text
 manifest.json          Omarchy plugin manifest (must live at repo root)
-HardwareTooltip.qml    Bar icon + hover panel
+HardwareTooltip.qml    Bar icon + click panel
 preview.gif            README demo
 preview.png            Marketplace still (teal theme)
 docs/theme-night.png   Same panel after a theme change

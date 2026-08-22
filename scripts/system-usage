@@ -10,6 +10,7 @@
 #   gpu <percent> | n/a
 #   gpu_name <rest of line>
 #   gpu_kind render | infer
+#   gpu_hint nvidia-utils          (NVIDIA hardware, nvidia-smi missing)
 #   disk <mount> <used-gib> <total-gib> <percent> [model...]
 #
 # GPU source is the first tool that actually returns a sample:
@@ -348,6 +349,44 @@ gpu_report() {
 }
 
 gpu_report
+
+# Omarchy already ships nvidia-utils with the NVIDIA stack. If this machine
+# still has NVIDIA hardware and no nvidia-smi, tell the user once — never
+# install packages from here.
+nvidia_present() {
+  [[ -r /proc/driver/nvidia/version ]] && return 0
+  local f v
+  for f in /sys/bus/pci/devices/*/vendor; do
+    [[ -f $f ]] || continue
+    v=$(tr -d '[:space:]' < "$f" 2>/dev/null)
+    [[ $v == 0x10de ]] && return 0
+  done
+  return 1
+}
+
+notice_missing_nvidia_utils() {
+  command -v nvidia-smi >/dev/null 2>&1 && return 0
+  nvidia_present || return 0
+  echo "gpu_hint nvidia-utils"
+
+  local dir flag
+  dir="${XDG_CACHE_HOME:-$HOME/.cache}/hw-tooltip"
+  flag="$dir/nvidia-utils-notice"
+  [[ -f $flag ]] && return 0
+  mkdir -p "$dir" 2>/dev/null || return 0
+  : > "$flag" || return 0
+
+  local headline="NVIDIA tools missing"
+  local body="GPU stats need nvidia-utils. Omarchy usually ships this with the NVIDIA stack."
+  if command -v timeout >/dev/null 2>&1 && command -v omarchy >/dev/null 2>&1; then
+    timeout 2 omarchy notification send --app-name "Hardware Tooltip" -g "󰢮" -u normal \
+      "$headline" "$body" >/dev/null 2>&1 || true
+  elif command -v notify-send >/dev/null 2>&1; then
+    notify-send -a "Hardware Tooltip" -u normal "$headline" "$body" >/dev/null 2>&1 || true
+  fi
+}
+
+notice_missing_nvidia_utils
 
 # ---- Hardware labels (cached; names do not change every tick) --------
 

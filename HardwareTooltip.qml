@@ -24,6 +24,7 @@ BarWidget {
   property string gpuText: "n/a"
   property string gpuName: "GPU"
   property string gpuKind: "render"
+  property string gpuHint: ""
   property bool ramActive: false
   property bool diskActive: false
   property var disks: []
@@ -205,6 +206,7 @@ BarWidget {
     var gpu = "n/a"
     var gpuName = root.gpuName
     var gpuKind = root.gpuKind
+    var gpuHint = ""
     var ramActive = root.ramActive
     var diskActive = root.diskActive
 
@@ -235,6 +237,8 @@ BarWidget {
         if (gn) gpuName = gn
       } else if (key === "gpu_kind" && parts.length > 1) {
         gpuKind = parts[1]
+      } else if (key === "gpu_hint" && parts.length > 1) {
+        gpuHint = parts[1]
       } else if (key === "ram_active" && parts.length > 1) {
         ramActive = parts[1] === "1"
       } else if (key === "disk_io" && parts.length > 1) {
@@ -256,6 +260,7 @@ BarWidget {
     root.gpuText = gpu
     root.gpuName = gpuName
     root.gpuKind = gpuKind
+    root.gpuHint = gpuHint
     root.ramActive = ramActive
     root.diskActive = diskActive
     root.disks = disks
@@ -552,7 +557,9 @@ BarWidget {
           icon: "󰢮"
           title: "GPU"
           value: root.gpuText
-          status: root.gpuText === "n/a" ? "GPU stats unavailable" : root.gpuName
+          status: root.gpuText === "n/a"
+            ? (root.gpuHint === "nvidia-utils" ? "Install nvidia-utils for GPU stats" : "GPU stats unavailable")
+            : root.gpuName
           percent: root.gpuText === "n/a" ? -1 : root.gpuPct
         }
 

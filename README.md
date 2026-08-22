@@ -50,7 +50,7 @@ The 16 GB of unified memory is soldered GDDR6, not DIMMs, so `dmidecode` / `inxi
 
 ## Install
 
-Plugins run as unsandboxed code inside `omarchy-shell`. Only add repos you trust.
+Plugins run as unsandboxed code inside `omarchy-shell`. Only add repos you trust. No sudo or pkexec is required.
 
 ```bash
 omarchy plugin add https://github.com/IM0001GT/omarchy-hw-tooltip --enable
@@ -58,21 +58,7 @@ omarchy plugin add https://github.com/IM0001GT/omarchy-hw-tooltip --enable
 
 That clones into `~/.config/omarchy/plugins/im0001gt.hw-tooltip/`, validates the manifest, and can drop the widget on the right side of the bar, next to Power.
 
-Intel and AMD need no extra packages and no sysctl changes. On NVIDIA, if `nvidia-smi` is missing:
-
-```bash
-~/.config/omarchy/plugins/im0001gt.hw-tooltip/install.sh --deps
-```
-
-`--deps` is optional. Without it the widget still works; a missing NVIDIA tool just shows `n/a` for GPU.
-
-### One-shot from a clone
-
-```bash
-git clone https://github.com/IM0001GT/omarchy-hw-tooltip.git
-cd omarchy-hw-tooltip
-./install.sh
-```
+Intel and AMD need no extra packages. NVIDIA GPU load uses `nvidia-smi` from `nvidia-utils`, which Omarchy already ships with the NVIDIA driver stack. If that tool is missing on NVIDIA hardware, the widget shows it on the GPU line and sends one desktop notice. The widget still works without it; GPU load just reads `n/a`.
 
 ## Use
 
@@ -91,7 +77,7 @@ omarchy plugin update im0001gt.hw-tooltip --yes
 omarchy restart shell
 ```
 
-`omarchy plugin update` only fast-forwards the git checkout. Quickshell can keep the previous QML in memory until the shell restarts. `./install.sh` does the update and the restart together.
+`omarchy plugin update` only fast-forwards the git checkout. Quickshell can keep the previous QML in memory until the shell restarts.
 
 ## Uninstall
 
@@ -99,24 +85,11 @@ omarchy restart shell
 omarchy plugin remove im0001gt.hw-tooltip
 ```
 
-Current releases do not leave a sysctl drop-in. If an older `btop-monitor` install set `kernel.perf_event_paranoid=0`:
-
-```bash
-~/.config/omarchy/plugins/im0001gt.hw-tooltip/install.sh --deps
-```
-
-or by hand:
-
-```bash
-sudo rm -f /etc/sysctl.d/99-omarchy-btop-monitor.conf /etc/sysctl.d/50-perf-event.conf
-sudo sysctl -w kernel.perf_event_paranoid=2
-```
-
 ## Requirements
 
 - [Omarchy](https://omarchy.org/) with the shell plugin CLI (`omarchy plugin add`)
 - `btop` and `jq` (already on Omarchy)
-- Optional NVIDIA tools, only if `nvidia-smi` is missing
+- Optional `nvidia-utils`, only if `nvidia-smi` is missing (Omarchy usually already has it)
 
 | GPU | Extra package | How load is read |
 | --- | --- | --- |
@@ -135,7 +108,6 @@ preview.gif            README demo
 preview.png            Marketplace still (teal theme)
 docs/theme-night.png   Same panel after a theme change
 scripts/system-usage   CPU / RAM / GPU / disk sampler
-install.sh             Optional NVIDIA deps + enable / place the widget
 ```
 
 The repo root **is** the plugin. That is what `omarchy plugin add` and `omarchy plugin validate` expect.
